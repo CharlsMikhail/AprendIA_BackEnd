@@ -65,7 +65,27 @@ def get_course_outline(prompt):
             }
         }
 
-        Para cada sección y el video introductorio, incluye términos de búsqueda optimizados para YouTube que permitan encontrar videos educativos específicos sobre ese subtema.
+        Para cada sección y el video introductorio, genera términos de búsqueda optimizados para YouTube siguiendo estas reglas:
+
+        1. Para el video introductorio:
+           - Usa términos como "introducción", "conceptos básicos", "fundamentos"
+           - Incluye palabras clave como "tutorial", "explicación", "guía"
+           - Añade "para principiantes" o "desde cero" cuando sea apropiado
+           - Ejemplo: "introducción a [tema] tutorial completo para principiantes"
+
+        2. Para los videos de secciones:
+           - Usa el título exacto de la sección
+           - Añade términos específicos de la descripción
+           - Incluye palabras clave como "tutorial", "explicación", "ejemplos"
+           - Añade "en español" para asegurar contenido en español
+           - Ejemplo: "[título de sección] tutorial completo con ejemplos en español"
+
+        Los términos de búsqueda deben ser:
+        - Específicos y relevantes al contenido
+        - En español
+        - Optimizados para encontrar videos educativos de calidad
+        - Entre 5-10 palabras
+        - Incluir palabras clave que indiquen contenido educativo
         """
 
         response = azure_client.chat.completions.create(
@@ -119,9 +139,10 @@ def search_youtube_videos(query, max_results=5):
             q=query,
             type="video",
             videoLicense="creativeCommon",
-            maxResults=max_results,
+            maxResults=max_results * 2,  # Get more results to filter
             relevanceLanguage="es",  # Prefer Spanish results
-            videoDuration="medium"  # Medium length videos (4-20 minutes)
+            videoDuration="medium",  # Medium length videos (4-20 minutes)
+            order="relevance"  # Start with relevance
         )
         response = request_youtube.execute()
 
@@ -131,9 +152,10 @@ def search_youtube_videos(query, max_results=5):
                 part="snippet",
                 q=query,
                 type="video",
-                maxResults=max_results,
+                maxResults=max_results * 2,
                 relevanceLanguage="es",
-                videoDuration="medium"
+                videoDuration="medium",
+                order="relevance"
             )
             response = request_youtube.execute()
 
@@ -158,6 +180,7 @@ def search_youtube_videos(query, max_results=5):
                 video_details = details_map.get(video_id, {})
                 statistics = video_details.get("statistics", {})
                 content_details = video_details.get("contentDetails", {})
+                snippet = video_details.get("snippet", {})
 
                 # Extract duration in a user-friendly format
                 duration = content_details.get("duration", "PT0M0S")
@@ -167,9 +190,53 @@ def search_youtube_videos(query, max_results=5):
                     hours = int(minutes_match.group(1) or 0)
                     minutes = int(minutes_match.group(2) or 0)
                     seconds = int(minutes_match.group(3) or 0)
+                    total_minutes = (hours * 60) + minutes + (seconds / 60)
                     duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
                 else:
+                    total_minutes = 0
                     duration_str = "Desconocido"
+
+                # Get video metrics
+                views = int(statistics.get("viewCount", 0))
+                likes = int(statistics.get("likeCount", 0))
+                comments = int(statistics.get("commentCount", 0))
+                published_at = datetime.strptime(snippet.get("publishedAt", ""), "%Y-%m-%dT%H:%M:%SZ")
+                days_since_published = (datetime.now() - published_at).days
+
+                # Calculate scores for each criterion
+                # 1. Relevance (30% weight)
+                relevance_score = 1.0  # Base score, can be adjusted based on title/description match
+
+                # 2. Video Quality (25% weight)
+                quality_score = 0
+                if "HD" in snippet.get("tags", []):
+                    quality_score += 0.3
+                if "4K" in snippet.get("tags", []):
+                    quality_score += 0.4
+                if "1080p" in snippet.get("tags", []):
+                    quality_score += 0.3
+
+                # 3. Engagement (20% weight)
+                engagement_score = 0
+                if views > 0:
+                    like_ratio = likes / views
+                    comment_ratio = comments / views
+                    engagement_score = (like_ratio * 0.6) + (comment_ratio * 0.4)
+
+                # 4. Recency (15% weight)
+                recency_score = 1.0 if days_since_published <= 365 else 0.5
+
+                # 5. Duration (10% weight)
+                duration_score = 1.0 if 5 <= total_minutes <= 20 else 0.5
+
+                # Calculate final score with weights
+                final_score = (
+                    relevance_score * 0.30 +
+                    quality_score * 0.25 +
+                    engagement_score * 0.20 +
+                    recency_score * 0.15 +
+                    duration_score * 0.10
+                )
 
                 videos.append({
                     "title": item["snippet"]["title"],
@@ -179,22 +246,15 @@ def search_youtube_videos(query, max_results=5):
                     "thumbnail": item["snippet"]["thumbnails"]["high"]["url"],
                     "channelTitle": item["snippet"]["channelTitle"],
                     "publishedAt": item["snippet"]["publishedAt"],
-                    "views": int(statistics.get("viewCount", 0)),
-                    "likes": int(statistics.get("likeCount", 0)),
-                    "duration": duration_str
+                    "views": views,
+                    "likes": likes,
+                    "comments": comments,
+                    "duration": duration_str,
+                    "score": final_score
                 })
 
-            # Sort videos by a combination of views, likes, and relevance
-            for video in videos:
-                # Calculate a score based on views and likes
-                views_score = min(video["views"] / 1000, 100)  # Cap at 100k views
-                likes_score = min(video["likes"] / 100, 100)  # Cap at 10k likes
-
-                # Total score is a weighted combination
-                video["score"] = (views_score * 0.6) + (likes_score * 0.4)
-
-            # Return videos sorted by score
-            return sorted(videos, key=lambda x: x["score"], reverse=True)
+            # Return top videos sorted by final score
+            return sorted(videos, key=lambda x: x["score"], reverse=True)[:max_results]
 
         return []
 
@@ -220,7 +280,8 @@ def solicitar_cursos():
         course_id = f"course_{int(time.time())}"
 
         # Search for introductory video
-        intro_query = course_outline.get("searchQueries", {}).get("introductory", f"introducción a {prompt}")
+        intro_query = course_outline.get("searchQueries", {}).get("introductory", f"¿Qué es {prompt}") #nlp para el prompt
+        print(intro_query)
         intro_videos = search_youtube_videos(intro_query, max_results=3)
 
         preview_video_url = None
@@ -240,7 +301,7 @@ def solicitar_cursos():
                 "content": course_outline["introduction"],
                 "videoUrl": best_intro_video["videoUrl"],
                 "duration": best_intro_video["duration"],
-                "classes": 1
+                "classes": 1 #quitar
             })
 
         # Add the rest of the sections
