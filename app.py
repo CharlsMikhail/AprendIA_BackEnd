@@ -68,7 +68,7 @@ def get_course_outline(prompt):
         Para cada sección y el video introductorio, genera términos de búsqueda optimizados para YouTube siguiendo estas reglas:
 
         1. Para el video introductorio:
-           - Usa términos como "introducción", "conceptos básicos", "fundamentos"
+           - Usa términos como "introducción", "conceptos básicos", "desde cero"
            - Incluye palabras clave como "tutorial", "explicación", "guía"
            - Añade "para principiantes" o "desde cero" cuando sea apropiado
            - Ejemplo: "introducción a [tema] tutorial completo para principiantes"
@@ -139,10 +139,10 @@ def search_youtube_videos(query, max_results=5):
             q=query,
             type="video",
             videoLicense="creativeCommon",
-            maxResults=max_results * 2,  # Get more results to filter
-            relevanceLanguage="es",  # Prefer Spanish results
-            videoDuration="medium",  # Medium length videos (4-20 minutes)
-            order="relevance"  # Start with relevance
+            maxResults=max_results * 2,
+            relevanceLanguage="es",
+            videoDuration="medium",
+            order="relevance"
         )
         response = request_youtube.execute()
 
