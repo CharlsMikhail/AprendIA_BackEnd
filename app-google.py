@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os
@@ -8,12 +7,22 @@ import random
 import time
 from datetime import datetime
 from googleapiclient.discovery import build
-# from openai import AzureOpenAI # Eliminado
-import requests # Añadido para llamadas a Google API
+import requests
 from dotenv import load_dotenv
 from youtube_transcript_api import YouTubeTranscriptApi
-# from youtube_transcript_api.formatters import TextFormatter # No se usaba
 from googleapiclient.errors import HttpError
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize, sent_tokenize
+from textblob import TextBlob
+from spellchecker import SpellChecker
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+from sumy.summarizers.text_rank import TextRankSummarizer
+import spacy
 
 # Load environment variables
 load_dotenv()
@@ -25,20 +34,186 @@ CORS(app)  # Enable CORS for frontend access
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 # AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT") # Eliminado
 # AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY") # Eliminado
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") # Añadido
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # Añadido
 
 # --- Google Generative AI API Configuration ---
 # Puedes cambiar 'gemini-1.5-flash-latest' si necesitas otro modelo
 GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-latest")
 GOOGLE_API_URL_TEMPLATE = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_NAME}:generateContent"
 
+# Descargar recursos necesarios de NLTK
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('averaged_perceptron_tagger')
 
-# Configure Azure OpenAI client # Eliminado
-# azure_client = AzureOpenAI(
-#     azure_endpoint=AZURE_OPENAI_ENDPOINT,
-#     api_key=AZURE_OPENAI_API_KEY,
-#     api_version="2024-12-01-preview" # Ajusta la versión si es necesario
-# )
+# Cargar modelo de spaCy para español
+try:
+    nlp = spacy.load("es_core_news_sm")
+except:
+    print("Modelo de spaCy no encontrado. Por favor, ejecuta: python -m spacy download es_core_news_sm")
+
+# Diccionario de correcciones comunes
+CORRECCIONES_COMUNES = {
+    "ke": "que",
+    "q": "que",
+    "xq": "porque",
+    "pq": "porque",
+    "tb": "también",
+    "tmb": "también",
+    "tambn": "también",
+    "x": "por",
+    "d": "de",
+    "k": "que",
+    "q": "que",
+    "w": "con",
+    "c": "con",
+    "m": "me",
+    "t": "te",
+    "s": "es",
+    "xfa": "por favor",
+    "pls": "por favor",
+    "plz": "por favor",
+    "thx": "gracias",
+    "ty": "gracias",
+    "np": "no problem",
+    "yw": "de nada",
+    "nw": "de nada",
+    "np": "no hay problema",
+    "nvm": "no importa",
+    "idk": "no sé",
+    "idc": "no me importa",
+    "tbh": "para ser honesto",
+    "imo": "en mi opinión",
+    "imho": "en mi humilde opinión",
+    "afaik": "por lo que sé",
+    "afaict": "por lo que puedo ver",
+    "afaics": "por lo que puedo ver",
+    "afaict": "por lo que puedo ver",
+    "afaics": "por lo que puedo ver",
+    "afaict": "por lo que puedo ver",
+    "afaics": "por lo que puedo ver",
+    "afaict": "por lo que puedo ver",
+    "afaics": "por lo que puedo ver",
+}
+
+
+def procesar_transcripcion(texto):
+    """
+    Procesa y limpia una transcripción de video.
+    """
+    try:
+        # 1. Limpieza básica
+        # Eliminar timestamps y marcas de subtítulos
+        texto = re.sub(r'\[\d{2}:\d{2}:\d{2}\]|\[\d{2}:\d{2}\]', '', texto)
+        texto = re.sub(r'\[.*?\]', '', texto)  # Eliminar [Música], [Aplausos], etc.
+
+        # Eliminar caracteres especiales y emojis
+        texto = re.sub(r'[^\w\s]', ' ', texto)
+
+        # Convertir a minúsculas
+        texto = texto.lower()
+
+        # 2. Corrección de errores comunes
+        # Aplicar diccionario de correcciones
+        palabras = texto.split()
+        palabras_corregidas = [CORRECCIONES_COMUNES.get(palabra, palabra) for palabra in palabras]
+        texto = ' '.join(palabras_corregidas)
+
+        # Usar SpellChecker para correcciones adicionales
+        spell = SpellChecker(language='es')
+        palabras = texto.split()
+        palabras_corregidas = []
+        for palabra in palabras:
+            if len(palabra) > 2:  # Ignorar palabras muy cortas
+                correccion = spell.correction(palabra)
+                palabras_corregidas.append(correccion if correccion else palabra)
+            else:
+                palabras_corregidas.append(palabra)
+        texto = ' '.join(palabras_corregidas)
+
+        # 3. Eliminar stopwords
+        stop_words = set(stopwords.words('spanish'))
+        palabras = word_tokenize(texto)
+        palabras_filtradas = [palabra for palabra in palabras if palabra not in stop_words]
+        texto = ' '.join(palabras_filtradas)
+
+        # 4. Eliminar redundancias
+        # Usar TextBlob para detectar y eliminar repeticiones
+        blob = TextBlob(texto)
+        oraciones = blob.sentences
+        oraciones_unicas = []
+        for oracion in oraciones:
+            if oracion not in oraciones_unicas:
+                oraciones_unicas.append(str(oracion))
+        texto = ' '.join(oraciones_unicas)
+
+        # 5. Resumen del texto
+        # Usar TextRank para extraer las oraciones más importantes
+        parser = PlaintextParser.from_string(texto, Tokenizer("spanish"))
+        summarizer = TextRankSummarizer()
+        resumen = summarizer(parser.document, sentences_count=5)  # Obtener 5 oraciones más importantes
+        texto = ' '.join([str(sentence) for sentence in resumen])
+
+        # 6. Análisis de relevancia por segmentos
+        # Dividir en segmentos de 30 segundos (aproximadamente)
+        segmentos = sent_tokenize(texto)
+        segmentos_relevantes = []
+
+        # Calcular TF-IDF para cada segmento
+        vectorizer = TfidfVectorizer(stop_words='spanish')
+        try:
+            tfidf_matrix = vectorizer.fit_transform(segmentos)
+            # Calcular la densidad de palabras clave para cada segmento
+            densidades = np.array(tfidf_matrix.sum(axis=1)).flatten()
+            # Seleccionar segmentos con alta densidad
+            umbral = np.mean(densidades)
+            for i, densidad in enumerate(densidades):
+                if densidad > umbral:
+                    segmentos_relevantes.append(segmentos[i])
+        except:
+            # Si hay error en el cálculo de TF-IDF, usar todos los segmentos
+            segmentos_relevantes = segmentos
+
+        texto = ' '.join(segmentos_relevantes)
+
+        return texto
+
+    except Exception as e:
+        print(f"Error procesando transcripción: {e}")
+        return texto  # Devolver texto original si hay error
+
+
+def get_video_transcript(video_id, max_minutes=None):
+    """Obtiene la transcripción de un video de YouTube en español"""
+    try:
+        # Intentar obtener la transcripción en español
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['es'])
+
+        if max_minutes is None:
+            # Procesar la transcripción completa
+            texto_completo = " ".join([entry['text'] for entry in transcript])
+            return procesar_transcripcion(texto_completo)
+
+        max_seconds = max_minutes * 60
+        text_parts = []
+        current_time = 0
+
+        for entry in transcript:
+            if entry['start'] >= max_seconds:
+                break
+            text_parts.append(entry['text'])
+
+        # Procesar la transcripción parcial
+        texto_parcial = " ".join(text_parts)
+        return procesar_transcripcion(texto_parcial)
+
+    except Exception as e:
+        if "No transcripts were found" in str(e) or "TranscriptsDisabled" in str(e):
+            print(f"No se encontró transcripción en español o están deshabilitadas para el video {video_id}")
+            return None
+        print(f"Error obteniendo transcripción para {video_id}: {e}")
+        return None
+
 
 # --- Helper Function for Google Generative AI API Call (Minimal version) ---
 def call_google_generative_api_for_text(prompt_text):
@@ -56,10 +231,10 @@ def call_google_generative_api_for_text(prompt_text):
         "contents": [{
             "parts": [{"text": prompt_text}]
         }],
-         # Mantener configuraciones de generación simples o excluirlas
-         # "generationConfig": {
-         #    "temperature": 0.7, # Coincide con el original
-         # }
+        # Mantener configuraciones de generación simples o excluirlas
+        # "generationConfig": {
+        #    "temperature": 0.7, # Coincide con el original
+        # }
     })
 
     try:
@@ -78,7 +253,7 @@ def call_google_generative_api_for_text(prompt_text):
             print("Error Body:", response.text)
         except:
             pass
-        raise # Relanzar el error para que sea capturado por el llamador original
+        raise  # Relanzar el error para que sea capturado por el llamador original
     except (KeyError, IndexError) as parse_err:
         print(f"Error parseando respuesta de Google API: {parse_err}")
         print("Raw Response Data:", response_data)
@@ -164,14 +339,14 @@ def get_course_outline(prompt):
         }}
         """
         intro_user_message = f"Crea una introducción para un curso sobre: {topic}"
-        intro_full_prompt = f"{intro_system_message}\n\nUSER QUESTION:\n{intro_user_message}" # Combinar
+        intro_full_prompt = f"{intro_system_message}\n\nUSER QUESTION:\n{intro_user_message}"  # Combinar
 
         # Reemplazo de llamada Azure -> Google
         intro_response_text = call_google_generative_api_for_text(intro_full_prompt)
         # Limpiar posible markdown añadido por la API (puede ser necesario con Gemini)
         intro_response_text = re.sub(r'^```json\s*', '', intro_response_text).strip()
         intro_response_text = re.sub(r'\s*```$', '', intro_response_text).strip()
-        intro_data = json.loads(intro_response_text) # Parsear el JSON devuelto por la IA
+        intro_data = json.loads(intro_response_text)  # Parsear el JSON devuelto por la IA
 
         # Luego, generar el contenido detallado del curso (Usando Google API)
         # Mantener los prompts originales, combinándolos para Google API
@@ -213,14 +388,14 @@ def get_course_outline(prompt):
         }}
         """
         content_user_message = f"Crea un curso sobre: {topic}"
-        content_full_prompt = f"{content_system_message}\n\nUSER QUESTION:\n{content_user_message}" # Combinar
+        content_full_prompt = f"{content_system_message}\n\nUSER QUESTION:\n{content_user_message}"  # Combinar
 
         # Reemplazo de llamada Azure -> Google
         content_response_text = call_google_generative_api_for_text(content_full_prompt)
         # Limpiar posible markdown añadido por la API
         content_response_text = re.sub(r'^```json\s*', '', content_response_text).strip()
         content_response_text = re.sub(r'\s*```$', '', content_response_text).strip()
-        content_data = json.loads(content_response_text) # Parsear el JSON devuelto por la IA
+        content_data = json.loads(content_response_text)  # Parsear el JSON devuelto por la IA
 
         # Combinar la introducción con el contenido del curso (sin cambios)
         course_outline = {
@@ -232,8 +407,9 @@ def get_course_outline(prompt):
         # Si no estaba en el original que me diste, puedes quitar este bloque.
         # Asumiendo que necesitas estas queries como en el ejemplo anterior:
         course_outline["searchQueries"] = {
-             "introductory": f"introducción a {topic} para {level}s",
-             **{f"section{i}": f"{section['title']} tutorial {level}" for i, section in enumerate(course_outline["sections"])}
+            "introductory": f"introducción a {topic} para {level}s",
+            **{f"section{i}": f"{section['title']} tutorial {level}" for i, section in
+               enumerate(course_outline["sections"])}
         }
 
         return course_outline
@@ -251,93 +427,95 @@ def get_course_outline(prompt):
 
 # --- Resto de las funciones SIN CAMBIOS ---
 
-def calculate_video_score(video_details, snippet, statistics, days_since_published, total_minutes):
-    """Calcula la puntuación de un video basada en múltiples criterios (SIN CAMBIOS)"""
-    # 1. Relevancia (30%)
-    relevance_score = 1.0
-
-    # 2. Calidad del video (25%)
-    quality_score = 0
-    # Simplificado, asume que tags pueden no estar presentes o ser fiables
-    definition = video_details.get('contentDetails', {}).get('definition')
-    if definition == 'hd':
-        quality_score = 0.8
-    elif definition == 'sd':
-        quality_score = 0.4
-    else: # default a bit lower if unknown
-        quality_score = 0.3
-
-    # Intento original con tags (menos fiable)
-    # if "HD" in snippet.get("tags", []):
-    #     quality_score += 0.3
-    # if "4K" in snippet.get("tags", []):
-    #     quality_score += 0.4
-    # if "1080p" in snippet.get("tags", []):
-    #     quality_score += 0.3
-
-
-    # 3. Engagement (20%)
-    views = int(statistics.get("viewCount", 0))
-    likes = int(statistics.get("likeCount", 0))
-    comments = int(statistics.get("commentCount", 0))
-
-    engagement_score = 0
-    if views > 100: # Evitar división por cero y ruido inicial
-        # Normalizar ratios para que no se disparen con pocas views
-        like_ratio = (likes / views)
-        comment_ratio = (comments / views)
-        # Ponderar y limitar a 1.0
-        engagement_score = min(1.0, (like_ratio * 5) * 0.6 + (comment_ratio * 20) * 0.4) # Ajustar multiplicadores según necesidad
-
-    # 4. Actualidad (15%)
-    recency_score = 1.0 if days_since_published <= 365 else (0.5 if days_since_published <= 730 else 0.2) # Más granular
-
-    # 5. Duración (10%) - Ideal entre 5 y 25 mins
-    duration_score = 1.0 if 5 <= total_minutes <= 25 else (0.5 if total_minutes < 5 else 0.7) # Penalizar menos los largos > 25
-
-    # Cálculo de la puntuación final con pesos (SIN CAMBIOS)
-    final_score = (
-            relevance_score * 0.30 +
-            quality_score * 0.25 +
-            engagement_score * 0.20 +
-            recency_score * 0.15 +
-            duration_score * 0.10
-    )
-
-    return final_score # Ya no redondea aquí para más precisión en el ordenamiento
-
-def get_video_transcript(video_id, max_minutes=None):
-    """Obtiene la transcripción de un video de YouTube en español (SIN CAMBIOS)"""
+def calculate_video_score(video_details, snippet, statistics, days_since_published, total_minutes, section_content=""):
+    """Calcula la puntuación de un video basada en múltiples criterios"""
     try:
-        # Intentar obtener la transcripción en español (original)
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['es'])
+        # 1. Relevancia (30%) - Ahora usando similitud de texto
+        relevance_score = 0.0
+        if section_content:
+            # Combinar título y descripción del video
+            video_text = f"{snippet.get('title', '')} {snippet.get('description', '')}"
 
-        if max_minutes is None:
-            return " ".join([entry['text'] for entry in transcript])
+            # Crear vectorizador TF-IDF
+            vectorizer = TfidfVectorizer(stop_words='english')
+            try:
+                # Convertir textos a vectores TF-IDF
+                tfidf_matrix = vectorizer.fit_transform([video_text, section_content])
+                # Calcular similitud coseno
+                similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+                relevance_score = float(similarity)
+            except Exception as e:
+                print(f"Error calculando similitud: {e}")
+                relevance_score = 0.5  # Valor por defecto si hay error
+        else:
+            relevance_score = 0.5  # Valor por defecto si no hay contenido de sección
 
-        max_seconds = max_minutes * 60
-        text_parts = []
-        current_time = 0
+        # 2. Verificación de transcripción (20%)
+        transcript_score = 0.0
+        try:
+            # Intentar obtener la transcripción sin descargarla completamente
+            transcript_list = YouTubeTranscriptApi.list_transcripts(snippet.get('id', {}).get('videoId', ''))
+            # Verificar si existe transcripción en español
+            if transcript_list.find_transcript(['es']):
+                transcript_score = 1.0
+            else:
+                # Si no hay en español, verificar si hay en otros idiomas
+                available_transcripts = transcript_list.find_manually_created_transcript()
+                if available_transcripts:
+                    transcript_score = 0.5  # Medio punto si hay transcripción en otro idioma
+        except Exception as e:
+            print(f"Error verificando transcripción: {e}")
+            transcript_score = 0.0
 
-        for entry in transcript:
-            # Usar el tiempo de inicio para decidir si incluirlo
-            if entry['start'] >= max_seconds:
-                break
+        # 3. Calidad del video (15%)
+        quality_score = 0
+        definition = video_details.get('contentDetails', {}).get('definition')
+        if definition == 'hd':
+            quality_score = 0.8
+        elif definition == 'sd':
+            quality_score = 0.4
+        else:
+            quality_score = 0.3
 
-            text_parts.append(entry['text'])
-            # Actualizar current_time podría ser más preciso con start + duration
-            # pero el original solo usaba start > max_seconds para cortar
-            # Mantenemos la lógica original de corte por entry['start']
-            # current_time = entry['start'] + entry['duration'] # Comentado para mantener original
+        # 4. Engagement (15%)
+        views = int(statistics.get("viewCount", 0))
+        likes = int(statistics.get("likeCount", 0))
+        comments = int(statistics.get("commentCount", 0))
 
-        return " ".join(text_parts)
+        engagement_score = 0
+        if views > 100:
+            like_ratio = (likes / views)
+            comment_ratio = (comments / views)
+            engagement_score = min(1.0, (like_ratio * 5) * 0.6 + (comment_ratio * 20) * 0.4)
+
+        # 5. Actualidad (10%)
+        recency_score = 1.0 if days_since_published <= 365 else (
+            0.5 if days_since_published <= 730 else 0.2)
+
+        # 6. Duración (10%) - Ideal entre 5 y 25 mins
+        duration_score = 1.0 if 5 <= total_minutes <= 25 else (
+            0.5 if total_minutes < 5 else 0.7)
+
+        # Cálculo de la puntuación final con nuevos pesos
+        final_score = (
+                relevance_score * 0.30 +
+                transcript_score * 0.20 +
+                quality_score * 0.15 +
+                engagement_score * 0.15 +
+                recency_score * 0.10 +
+                duration_score * 0.10
+        )
+
+        # Si no hay transcripción disponible, penalizar significativamente
+        if transcript_score == 0:
+            final_score *= 0.5
+
+        return final_score
+
     except Exception as e:
-        # Mantener manejo de error original
-        if "No transcripts were found" in str(e) or "TranscriptsDisabled" in str(e):
-            print(f"No se encontró transcripción en español o están deshabilitadas para el video {video_id}")
-            return None
-        print(f"Error obteniendo transcripción para {video_id}: {e}")
-        return None
+        print(f"Error calculando score del video: {e}")
+        return 0.0  # Retornar 0 si hay algún error en el cálculo
+
 
 def get_video_comments(video_id, max_results=50):
     """Obtiene los comentarios de un video (SIN CAMBIOS)"""
@@ -348,7 +526,7 @@ def get_video_comments(video_id, max_results=50):
             videoId=video_id,
             maxResults=max_results,
             textFormat="plainText",
-            order="relevance" # Mantener orden original
+            order="relevance"  # Mantener orden original
         )
         response = request.execute()
 
@@ -358,14 +536,14 @@ def get_video_comments(video_id, max_results=50):
             comment_snippet = item['snippet']['topLevelComment']['snippet']
             comments.append({
                 "author": comment_snippet['authorDisplayName'],
-                "text": comment_snippet['textDisplay'] # Usar textDisplay como en original
+                "text": comment_snippet['textDisplay']  # Usar textDisplay como en original
                 # "publishedAt": comment_snippet['publishedAt'], # No estaban en el original
                 # "likeCount": comment_snippet['likeCount'] # No estaban en el original
             })
         return comments
     except HttpError as e:
         # Mantener manejo de error original
-        if e.resp.status == 403 and 'commentsDisabled' in str(e.content): # Checar e.content es más robusto
+        if e.resp.status == 403 and 'commentsDisabled' in str(e.content):  # Checar e.content es más robusto
             print(f"Los comentarios están deshabilitados para el video {video_id}")
             return []
         else:
@@ -375,28 +553,149 @@ def get_video_comments(video_id, max_results=50):
         print(f"Error inesperado obteniendo comentarios para {video_id}: {e}")
         return []
 
+
+def verificar_transcripcion_disponible(video_id):
+    """Verifica si un video tiene transcripción disponible sin descargarla"""
+    try:
+        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        # Verificar si existe transcripción en español
+        if transcript_list.find_transcript(['es']):
+            return True
+        # Si no hay en español, verificar si hay en otros idiomas
+        available_transcripts = transcript_list.find_manually_created_transcript()
+        return bool(available_transcripts)
+    except Exception as e:
+        print(f"Error verificando transcripción para video {video_id}: {e}")
+        return False
+
+
+def search_youtube_videos(query, max_results=4, section_content="", used_video_ids=None):
+    """Search for YouTube videos based on query and return the best match"""
+    if used_video_ids is None:
+        used_video_ids = set()
+
+    try:
+        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+
+        # Primera búsqueda con licencia YouTube, retrieving up to 50 videos
+        request_youtube = youtube.search().list(
+            part="snippet",
+            q=query,
+            type="video",
+            videoLicense="creativeCommon",
+            maxResults=50,
+            relevanceLanguage="es",
+            videoDuration="medium",
+            order="relevance"
+        )
+        response = request_youtube.execute()
+
+        videos = []
+        all_videos_data = []
+        if response.get("items"):
+            # Obtener IDs de video para metadatos adicionales
+            video_ids = [item["id"]["videoId"] for item in response["items"]]
+
+            # Obtener estadísticas y detalles del contenido
+            video_details = youtube.videos().list(
+                part="statistics,contentDetails,snippet",
+                id=",".join(video_ids)
+            ).execute()
+
+            # Crear mapa de ID a detalles
+            details_map = {item["id"]: item for item in video_details["items"]}
+
+            # Procesar cada video
+            for item in response["items"]:
+                video_id = item["id"]["videoId"]
+
+                # Verificar si tiene transcripción disponible
+                if not verificar_transcripcion_disponible(video_id):
+                    print(f"Video {video_id} descartado: No tiene transcripción disponible")
+                    continue
+
+                video_details = details_map.get(video_id, {})
+                statistics = video_details.get("statistics", {})
+                content_details = video_details.get("contentDetails", {})
+                snippet = video_details.get("snippet", {})
+
+                # Extraer duración
+                duration = content_details.get("duration", "PT0M0S")
+                minutes_match = re.search(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
+                if minutes_match:
+                    hours = int(minutes_match.group(1) or 0)
+                    minutes = int(minutes_match.group(2) or 0)
+                    seconds = int(minutes_match.group(3) or 0)
+                    total_minutes = (hours * 60) + minutes + (seconds / 60)
+                    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
+                else:
+                    total_minutes = 0
+                    duration_str = "Desconocido"
+
+                # Calcular días desde publicación
+                published_at = datetime.strptime(snippet.get("publishedAt", ""), "%Y-%m-%dT%H:%M:%SZ")
+                days_since_published = (datetime.now() - published_at).days
+
+                # Calcular puntuación inicial
+                score = calculate_video_score(video_details, snippet, statistics, days_since_published, total_minutes)
+
+                # Collect all relevant video data
+                video_data = {
+                    "title": item["snippet"]["title"],
+                    "description": item["snippet"]["description"],
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "videoUrl": f"https://www.youtube.com/embed/{video_id}",
+                    "thumbnail": item["snippet"]["thumbnails"]["high"]["url"],
+                    "channelTitle": item["snippet"]["channelTitle"],
+                    "publishedAt": item["snippet"]["publishedAt"],
+                    "views": int(statistics.get("viewCount", 0)),
+                    "likes": int(statistics.get("likeCount", 0)),
+                    "comments": int(statistics.get("commentCount", 0)),
+                    "duration": duration_str,
+                    "score": score,
+                    "videoId": video_id,
+                    "totalMinutes": total_minutes,
+                    "full_snippet": snippet,
+                    "full_statistics": statistics,
+                    "full_contentDetails": content_details
+                }
+
+                all_videos_data.append(video_data)
+
+            # Ordenar los videos por score y tomar los 10 mejores
+            sorted_videos = sorted(all_videos_data, key=lambda x: x["score"], reverse=True)
+            top_10_videos = sorted_videos[:10]
+
+            # Procesar las transcripciones de los 10 mejores videos
+            for video in top_10_videos:
+                transcript = get_video_transcript(video["videoId"])
+                if transcript:
+                    video["processed_transcript"] = transcript
+                else:
+                    # Si no se puede obtener la transcripción, remover el video
+                    top_10_videos.remove(video)
+
+            return top_10_videos
+
+        return []
+
+    except Exception as e:
+        print(f"Error searching YouTube videos: {e}")
+        return []
+
+
 def analyze_video_content(video_id, section_content, used_video_ids):
     """Analiza si el contenido del video es relevante para la sección usando Google API"""
     if video_id in used_video_ids:
-        # Mantener lógica original
         return False, "Video ya usado en otra sección"
 
-    # Obtener transcripción completa (como en el original)
-    print(f"--- Analizando Video ID: {video_id} ---")
-    transcript = get_video_transcript(video_id, max_minutes=None)
-    if not transcript:
-        # Mantener lógica original
-        return False, "No se pudo obtener la transcripción"
-
-    # Limitar tamaño de transcripción para evitar errores de API (buena práctica añadirla)
-    max_chars = 20000 # Límite generoso pero seguro
-    if len(transcript) > max_chars:
-        transcript = transcript[:max_chars] + "..."
-        print(f"Transcripción truncada a {max_chars} caracteres para análisis.")
-
     try:
-        # Usar Google API para analizar la relevancia
-        # Mantener los prompts originales, combinándolos
+        # Obtener la transcripción procesada del video
+        transcript = get_video_transcript(video_id)
+        if not transcript:
+            return False, "No se pudo obtener la transcripción"
+
+        # Preparar el prompt para la IA con todas las transcripciones procesadas
         system_message = """
         Eres un experto en análisis de contenido educativo. Tu tarea es determinar si el contenido de un video es relevante para una sección específica de un curso.
 
@@ -420,142 +719,40 @@ def analyze_video_content(video_id, section_content, used_video_ids):
         Título y descripción de la sección:
         {section_content}
 
-        Transcripción del video:
+        Transcripción procesada del video:
         {transcript}
         """
-        analysis_full_prompt = f"{system_message}\n\nUSER QUESTION:\n{user_message}" # Combinar
+        analysis_full_prompt = f"{system_message}\n\nUSER QUESTION:\n{user_message}"
 
-        # Reemplazo de llamada Azure -> Google
+        # Llamar a la API de Google
         analysis_response_text = call_google_generative_api_for_text(analysis_full_prompt)
-        # Limpiar posible markdown añadido por la API
         analysis_response_text = re.sub(r'^```json\s*', '', analysis_response_text).strip()
         analysis_response_text = re.sub(r'\s*```$', '', analysis_response_text).strip()
-
-        # Parsear la respuesta JSON (como en el original)
         analysis = json.loads(analysis_response_text)
 
-        # Mantener lógica de decisión original
-        # Si la confianza es menor a 0.7, consideramos que el video no es lo suficientemente relevante
-        if analysis.get("confidence_score", 0) < 0.7: # Usar .get con default
-             print(f"Análisis video {video_id}: Rechazado por baja confianza ({analysis.get('confidence_score', 0):.2f}). Razón: {analysis.get('reason', 'N/A')}")
-             return False, f"Contenido no suficientemente relevante (Confianza < 0.7): {analysis.get('reason', 'Sin razón específica')}"
+        if analysis.get("confidence_score", 0) < 0.7:
+            print(
+                f"Análisis video {video_id}: Rechazado por baja confianza ({analysis.get('confidence_score', 0):.2f}). Razón: {analysis.get('reason', 'N/A')}")
+            return False, f"Contenido no suficientemente relevante (Confianza < 0.7): {analysis.get('reason', 'Sin razón específica')}"
 
-        # Si es relevante y la confianza es >= 0.7
-        if analysis.get("is_relevant", False): # Usar .get con default
-             print(f"Análisis video {video_id}: Aprobado (Confianza: {analysis.get('confidence_score', 0):.2f}). Razón: {analysis.get('reason', 'N/A')}")
-             return True, f"Video aprobado por análisis de contenido. {analysis.get('reason', 'Análisis exitoso')}"
+        if analysis.get("is_relevant", False):
+            print(
+                f"Análisis video {video_id}: Aprobado (Confianza: {analysis.get('confidence_score', 0):.2f}). Razón: {analysis.get('reason', 'N/A')}")
+            return True, f"Video aprobado por análisis de contenido. {analysis.get('reason', 'Análisis exitoso')}"
         else:
-             print(f"Análisis video {video_id}: Rechazado por IA. Razón: {analysis.get('reason', 'N/A')}")
-             return False, f"Contenido no relevante según análisis: {analysis.get('reason', 'IA determinó no relevante')}"
+            print(f"Análisis video {video_id}: Rechazado por IA. Razón: {analysis.get('reason', 'N/A')}")
+            return False, f"Contenido no relevante según análisis: {analysis.get('reason', 'IA determinó no relevante')}"
 
-    # Mantener manejo de errores original
     except Exception as e:
         print(f"Error en el análisis de contenido para {video_id}: {e}")
-        # Considera loguear el texto si falla json.loads
         if 'analysis_response_text' in locals() and isinstance(e, json.JSONDecodeError):
-             print("Texto recibido (análisis):", analysis_response_text)
-        # Retornar False si hay cualquier error durante el análisis
+            print("Texto recibido (análisis):", analysis_response_text)
         return False, f"Error durante el análisis de contenido: {str(e)}"
 
-def search_youtube_videos(query, max_results=4, section_content="", used_video_ids=None):
-    """Search for YouTube videos based on query and return the best match"""
-    if used_video_ids is None:
-        used_video_ids = set()
 
-    try:
-        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-
-        # Primera búsqueda con licencia YouTube
-        request_youtube = youtube.search().list(
-            part="snippet",
-            q=query,
-            type="video",
-            videoLicense="creativeCommon",
-            maxResults=max_results * 2,
-            relevanceLanguage="es",
-            videoDuration="medium",
-            order="relevance"
-        )
-        response = request_youtube.execute()
-
-        videos = []
-        approved_videos = []
-
-        if response.get("items"):
-            # Obtener IDs de video para metadatos adicionales
-            video_ids = [item["id"]["videoId"] for item in response["items"]]
-
-            # Obtener estadísticas y detalles del contenido
-            video_details = youtube.videos().list(
-                part="statistics,contentDetails,snippet",
-                id=",".join(video_ids)
-            ).execute()
-
-            # Crear mapa de ID a detalles
-            details_map = {item["id"]: item for item in video_details["items"]}
-
-            # Procesar cada video
-            for item in response["items"]:
-                video_id = item["id"]["videoId"]
-                video_details = details_map.get(video_id, {})
-                statistics = video_details.get("statistics", {})
-                content_details = video_details.get("contentDetails", {})
-                snippet = video_details.get("snippet", {})
-
-                # Extraer duración
-                duration = content_details.get("duration", "PT0M0S")
-                minutes_match = re.search(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?', duration)
-                if minutes_match:
-                    hours = int(minutes_match.group(1) or 0)
-                    minutes = int(minutes_match.group(2) or 0)
-                    seconds = int(minutes_match.group(3) or 0)
-                    total_minutes = (hours * 60) + minutes + (seconds / 60)
-                    duration_str = f"{hours}h {minutes}m" if hours > 0 else f"{minutes} min"
-                else:
-                    total_minutes = 0
-                    duration_str = "Desconocido"
-
-                # Calcular días desde publicación
-                published_at = datetime.strptime(snippet.get("publishedAt", ""), "%Y-%m-%dT%H:%M:%SZ")
-                days_since_published = (datetime.now() - published_at).days
-
-                # Calcular puntuación
-                score = calculate_video_score(video_details, snippet, statistics, days_since_published, total_minutes)
-
-                # Verificar contenido y relevancia
-                is_approved, reason = analyze_video_content(video_id, section_content, used_video_ids)
-
-                if is_approved:
-                    videos.append({
-                        "title": item["snippet"]["title"],
-                        "description": item["snippet"]["description"],
-                        "url": f"https://www.youtube.com/watch?v={video_id}",
-                        "videoUrl": f"https://www.youtube.com/embed/{video_id}",
-                        "thumbnail": item["snippet"]["thumbnails"]["high"]["url"],
-                        "channelTitle": item["snippet"]["channelTitle"],
-                        "publishedAt": item["snippet"]["publishedAt"],
-                        "views": int(statistics.get("viewCount", 0)),
-                        "likes": int(statistics.get("likeCount", 0)),
-                        "comments": int(statistics.get("commentCount", 0)),
-                        "duration": duration_str,
-                        "score": score,
-                        "videoId": video_id
-                    })
-
-            # Retornar videos ordenados por puntuación
-            return sorted(videos, key=lambda x: x["score"], reverse=True)[:max_results]
-
-        return []
-
-    except Exception as e:
-        print(f"Error searching YouTube videos: {e}")
-        return []
-
-# --- Endpoint Flask y Lógica Principal SIN CAMBIOS ---
 @app.route("/solicitar_cursos", methods=["POST"])
 def solicitar_cursos():
     """Main endpoint to generate a course based on a prompt (Lógica original con llamadas a IA actualizadas)"""
-    start_time = time.time() # Para medir tiempo total
     try:
         data = request.json
         prompt = data.get("prompt", "").strip()
@@ -574,37 +771,49 @@ def solicitar_cursos():
             course_outline = get_course_outline(prompt)
             print("Esquema del curso generado con éxito.")
         except Exception as e:
-             print(f"Fallo crítico: No se pudo generar el esquema del curso. Error: {e}")
-             return jsonify({"error": f"Error al generar la estructura base del curso: {str(e)}"}), 500
-
+            print(f"Fallo crítico: No se pudo generar el esquema del curso. Error: {e}")
+            return jsonify({"error": f"Error al generar la estructura base del curso: {str(e)}"}), 500
 
         # Generate a random course ID (lógica original)
-        course_id = f"course_{int(time.time())}" # No estaba en el original explícitamente, pero útil
+        course_id = f"course_{int(time.time())}"  # No estaba en el original explícitamente, pero útil
 
         # Track used video IDs to avoid duplicates (lógica original)
         used_video_ids = set()
 
         # Search for introductory video (lógica original)
         introduction = None
-        intro_video_data = None # Para guardar datos del video de intro
-        intro_query = course_outline.get("searchQueries", {}).get("introductory", f"¿Qué es {prompt.split(' ')[0]}") # Query original
+        intro_video_data = None  # Para guardar datos del video de intro
+        # Use search_youtube_videos to get a list of potential intro videos (up to 50)
+        intro_query = course_outline.get("searchQueries", {}).get("introductory",
+                                                                  f"¿Qué es {prompt.split(' ')[0]}")  # Query original
         print(f"Buscando video de introducción con query: '{intro_query}'")
-        intro_videos = search_youtube_videos(
+        # This now returns a list of video data (up to 50)
+        all_intro_videos_data = search_youtube_videos(
             intro_query,
-            max_results=1, # Solo 1 para intro
-            # Pasar descripción de la intro para análisis de IA
+            # max_results is no longer used in search_youtube_videos for filtering,
+            # the function now always attempts to get 50.
+            # We pass section_content and used_video_ids for the AI analysis
             section_content=course_outline.get("introduction", ""),
             used_video_ids=used_video_ids
         )
 
-        # Prepare introduction data (lógica original)
-        if intro_videos:
-            best_intro_video = intro_videos[0]
+        # Process the list of intro videos: analyze with AI and filter
+        approved_intro_videos = []
+        print(f"Analizando {len(all_intro_videos_data)} videos para la introducción...")
+        for video_data in all_intro_videos_data:
+            is_approved, reason = analyze_video_content(video_data["videoId"], course_outline.get("introduction", ""),
+                                                        used_video_ids)
+            if is_approved:
+                approved_intro_videos.append(video_data)
+
+        # Select the best intro video from the approved list
+        if approved_intro_videos:
+            # Sort approved videos by score and select the best one
+            best_intro_video = sorted(approved_intro_videos, key=lambda x: x["score"], reverse=True)[0]
             used_video_ids.add(best_intro_video["videoId"])
-            intro_video_data = best_intro_video # Guardar para cálculos de duración
+            intro_video_data = best_intro_video  # Guardar para cálculos de duración
             introduction = {
                 "content": course_outline["introduction"],
-                "videoUrl": best_intro_video["videoUrl"], # URL original
                 "duration": best_intro_video["duration"],
                 # Añadir otros campos útiles si se desea
                 "title": best_intro_video["title"],
@@ -613,19 +822,17 @@ def solicitar_cursos():
             print(f"Video de introducción encontrado: {best_intro_video['videoId']}")
         else:
             print("Advertencia: No se encontró video para la introducción.")
-            # Mantener intro sin video si no se encuentra
             introduction = {
-                 "content": course_outline.get("introduction", "Introducción no disponible"),
-                 "videoUrl": None,
-                 "duration": "N/A"
+                "content": course_outline.get("introduction", "Introducción no disponible"),
+                "videoUrl": None,
+                "duration": "0 min"  # Set duration to 0 if no video
             }
-
 
         # Prepare course sections with videos (lógica original)
         sections = []
-        total_minutes_calculation = 0 # Para sumar duraciones
+        total_minutes_calculation = 0  # Para sumar duraciones
 
-        print(f"\n--- Buscando videos para {len(course_outline.get('sections',[]))} secciones ---")
+        print(f"\n--- Buscando videos para {len(course_outline.get('sections', []))} secciones ---")
         # Add the course sections (lógica original)
         for i, section in enumerate(course_outline.get("sections", [])):
             section_id = i + 1
@@ -637,11 +844,10 @@ def solicitar_cursos():
             default_query = f"{section.get('title', '')} {prompt.split(' ')[0]}"
             section_query = course_outline.get("searchQueries", {}).get(section_query_key, default_query)
 
-            # Search for videos for this section (lógica original)
-            section_videos = search_youtube_videos(
+            # Use search_youtube_videos to get a list of potential section videos (up to 50)
+            all_section_videos_data = search_youtube_videos(
                 section_query,
-                max_results=1, # Solo 1 video por sección
-                # Pasar descripción de la sección para análisis de IA
+                # max_results is no longer used for filtering here
                 section_content=section.get("description", ""),
                 used_video_ids=used_video_ids
             )
@@ -650,18 +856,28 @@ def solicitar_cursos():
                 "id": section_id,
                 "title": section.get("title", f"Sección {section_id}"),
                 "content": section.get("description", "Contenido no disponible."),
-                "videoUrl": None, # Default
-                "duration": "N/A", # Default
-                "classes": 1, # Mantener lógica original
+                "videoUrl": None,  # Default
+                "duration": "N/A",  # Default
+                "classes": 1,  # Mantener lógica original
                 "videoId": None,
                 "videoTitle": None,
             }
 
-            if section_videos:
-                best_video = section_videos[0]
+            # Process the list of section videos: analyze with AI and filter
+            approved_section_videos = []
+            print(f"Analizando {len(all_section_videos_data)} videos para la Sección {section_id}...")
+            for video_data in all_section_videos_data:
+                is_approved, reason = analyze_video_content(video_data["videoId"], section.get("description", ""),
+                                                            used_video_ids)
+                if is_approved:
+                    approved_section_videos.append(video_data)
+
+            # Select the best section video from the approved list
+            if approved_section_videos:
+                # Sort approved videos by score and select the best one
+                best_video = sorted(approved_section_videos, key=lambda x: x["score"], reverse=True)[0]
                 used_video_ids.add(best_video["videoId"])
                 section_data.update({
-                    "videoUrl": best_video["videoUrl"], # URL original
                     "duration": best_video["duration"],
                     "videoId": best_video["videoId"],
                     "videoTitle": best_video["title"],
@@ -675,21 +891,20 @@ def solicitar_cursos():
 
             sections.append(section_data)
 
-
         # Add final evaluation section (lógica original)
         sections.append({
             "id": len(sections) + 1,
             "title": "Evaluación Final",
-            "content": "Evalúa lo aprendido en el curso.", # Contenido genérico
-            "videoUrl": None, # Sin video
+            "content": "Evalúa lo aprendido en el curso.",  # Contenido genérico
+            "videoUrl": None,  # Sin video
             "duration": "N/A",
-            "classes": 1, # Cuenta como una lección/sección
+            "classes": 1,  # Cuenta como una lección/sección
             "videoId": None,
             "videoTitle": None
         })
 
         # Calculate total classes and estimate total duration (lógica original)
-        total_classes = len(sections) # Número total de secciones incluyendo evaluación
+        total_classes = len(sections)  # Número total de secciones incluyendo evaluación
 
         # Añadir duración de la intro si hubo video
         if intro_video_data:
@@ -698,42 +913,40 @@ def solicitar_cursos():
         # Formatear duración total (lógica original)
         total_duration_str = "N/A"
         if total_minutes_calculation > 0:
-             total_hours = int(total_minutes_calculation // 60)
-             total_mins = int(total_minutes_calculation % 60)
-             if total_hours > 0:
-                 total_duration_str = f"{total_hours}h {total_mins}m"
-             else:
-                 total_duration_str = f"{total_mins}m"
-
+            total_hours = int(total_minutes_calculation // 60)
+            total_mins = int(total_minutes_calculation % 60)
+            if total_hours > 0:
+                total_duration_str = f"{total_hours}h {total_mins}m"
+            else:
+                total_duration_str = f"{total_mins}m"
 
         # Prepare final course data (estructura original)
-        current_date = datetime.now().strftime("%m/%Y") # Formato original
+        current_date = datetime.now().strftime("%m/%Y")  # Formato original
         course_data = {
             # Mantener la estructura de respuesta JSON original
             "title": course_outline.get("title", f"Curso sobre {prompt}"),
-            "introduction": introduction, # El objeto de introducción preparado antes
-            "instructor": "IA Professor", # Valor original
-            "rating": round(random.uniform(4.5, 4.9), 1), # Lógica original
-            "students": random.randint(5000, 15000), # Lógica original
-            "lastUpdated": current_date, # Lógica original
-            "language": "Español", # Valor original
-            "totalDuration": total_duration_str, # Calculado arriba
-            "totalLessons": total_classes, # Calculado arriba
-            "sections": sections, # Lista de secciones preparada arriba
-            "learningOutcomes": course_outline.get("learningOutcomes", []), # Del outline
-            "requirements": course_outline.get("requirements", []), # Del outline
-            "level": course_outline.get("level", "principiante"), # Del outline
-            "level_description": course_outline.get("level_description", "") # Del outline
+            "introduction": introduction,  # El objeto de introducción preparado antes
+            "instructor": "IA Professor",  # Valor original
+            "rating": round(random.uniform(4.5, 4.9), 1),  # Lógica original
+            "students": random.randint(5000, 15000),  # Lógica original
+            "lastUpdated": current_date,  # Lógica original
+            "language": "Español",  # Valor original
+            "totalDuration": total_duration_str,  # Calculado arriba
+            "totalLessons": total_classes,  # Calculado arriba
+            "sections": sections,  # Lista de secciones preparada arriba
+            "learningOutcomes": course_outline.get("learningOutcomes", []),  # Del outline
+            "requirements": course_outline.get("requirements", []),  # Del outline
+            "level": course_outline.get("level", "principiante"),  # Del outline
+            "level_description": course_outline.get("level_description", "")  # Del outline
         }
 
         end_time = time.time()
-        print(f"=== Generación de curso completada en {end_time - start_time:.2f} segundos ===")
+        print(f"=== Generación de curso completada en {end_time :.2f} segundos ===")
         return jsonify(course_data)
 
     # Mantener manejo de errores original del endpoint
-    except Exception as e:
-        end_time = time.time()
-        print(f"Error generando curso después de {end_time - start_time:.2f} segundos: {e}")
+    except Exception as e:  # Keep the original exception handling
+        print(f"Error generating course: {e}")
         import traceback
         traceback.print_exc()
         # Devolver error genérico como en el original
@@ -753,12 +966,13 @@ def health_check():
             "youtube_api": "configured" if youtube_ok else "missing_key",
             "google_generative_api": "configured" if google_ok else "missing_key"
         }
-     }
+    }
     status_code = 200 if status["status"] == "ok" else 503
     return jsonify(status), status_code
+
 
 # --- Ejecución Principal SIN CAMBIOS ---
 if __name__ == "__main__":
     # Mantener forma original de correr la app
-    port = int(os.environ.get("PORT", 5000)) # Puerto 5000 como en muchos ejemplos Flask
-    app.run(host="0.0.0.0", port=port, debug=True) # debug=True como en original
+    port = int(os.environ.get("PORT", 5000))  # Puerto 5000 como en muchos ejemplos Flask
+    app.run(host="0.0.0.0", port=port, debug=True)  # debug=True como en original
