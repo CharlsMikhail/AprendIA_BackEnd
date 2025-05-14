@@ -23,6 +23,7 @@ from sumy.parsers.plaintext import PlaintextParser
 from sumy.nlp.tokenizers import Tokenizer
 from sumy.summarizers.text_rank import TextRankSummarizer
 import spacy
+import concurrent.futures
 
 # Load environment variables
 load_dotenv()
@@ -45,6 +46,7 @@ GOOGLE_API_URL_TEMPLATE = f"https://generativelanguage.googleapis.com/v1beta/mod
 nltk.download('punkt')
 nltk.download('stopwords')
 nltk.download('averaged_perceptron_tagger')
+nltk.download('punkt_tab')
 
 # Cargar modelo de spaCy para español
 try:
@@ -297,42 +299,60 @@ def get_course_outline(prompt):
         }
     }
 
-    # Nivel por defecto (sin cambios)
+    # Nivel por defecto
     level = "principiante"
 
-    # Convertir el prompt a minúsculas para la comparación (sin cambios)
+    # Convertir el prompt a minúsculas para la comparación
     prompt_lower = prompt.lower()
 
-    # Detectar el nivel en el prompt (sin cambios)
+    # Detectar el nivel en el prompt
     for level_name, level_info in levels.items():
         if any(keyword in prompt_lower for keyword in level_info["keywords"]):
             level = level_name
             break
 
-    # Eliminar palabras clave de nivel del prompt para obtener el tema principal (sin cambios)
-    topic = prompt
-    for level_info in levels.values():
-        for keyword in level_info["keywords"]:
-            topic = topic.replace(keyword, "").strip()
+    # Extraer el tema principal del prompt
+    topic_extraction_prompt = f"""
+    Analiza el siguiente prompt y extrae el tema principal del curso. 
+    El tema principal debe ser una palabra o frase corta que identifique específicamente de qué trata el curso.
+    Por ejemplo:
+    - "curso de Java para principiantes porque quiero aprender programación" -> "Java"
+    - "quiero aprender a tocar la guitarra desde cero" -> "Guitarra"
+    - "curso de cocina italiana para principiantes" -> "Cocina italiana"
+    
+    Prompt: {prompt}
+    
+    Responde SOLO con el tema principal, sin explicaciones adicionales.
+    """
+    
+    try:
+        topic = call_google_generative_api_for_text(topic_extraction_prompt).strip()
+    except Exception as e:
+        print(f"Error extrayendo tema principal: {e}")
+        # Fallback: eliminar palabras clave de nivel del prompt
+        topic = prompt
+        for level_info in levels.values():
+            for keyword in level_info["keywords"]:
+                topic = topic.replace(keyword, "").strip()
 
-    # Obtener la configuración del nivel seleccionado (sin cambios)
+    # Obtener la configuración del nivel seleccionado
     level_config = levels[level]
+    max_workers_outline = min(32, (os.cpu_count() or 1) * 2) # Para paralelizar llamadas a IA aquí
 
     try:
-        # Primero, generar la introducción general (Usando Google API)
-        # Mantener los prompts originales, combinándolos para Google API
+        # Preparar los prompts para introducción y contenido
         intro_system_message = f"""
         Eres un experto en educación. Tu tarea es crear una introducción general y motivadora para un curso de nivel {level} sobre {topic}.
-
+        
         La introducción debe:
         1. Ser breve y atractiva
         2. Explicar por qué es importante aprender {topic}
         3. Describir el enfoque del curso
         4. Motivar a los estudiantes
         5. No entrar en detalles técnicos (esos irán en las secciones)
-
+        
         IMPORTANTE: No incluyas ninguna referencia a videos, URLs o contenido multimedia en la respuesta.
-
+        
         Proporciona la respuesta en formato JSON:
         {{
             "introduction": "Texto de la introducción"
@@ -341,44 +361,36 @@ def get_course_outline(prompt):
         intro_user_message = f"Crea una introducción para un curso sobre: {topic}"
         intro_full_prompt = f"{intro_system_message}\n\nUSER QUESTION:\n{intro_user_message}"  # Combinar
 
-        # Reemplazo de llamada Azure -> Google
-        intro_response_text = call_google_generative_api_for_text(intro_full_prompt)
-        # Limpiar posible markdown añadido por la API (puede ser necesario con Gemini)
-        intro_response_text = re.sub(r'^```json\s*', '', intro_response_text).strip()
-        intro_response_text = re.sub(r'\s*```$', '', intro_response_text).strip()
-        intro_data = json.loads(intro_response_text)  # Parsear el JSON devuelto por la IA
-
-        # Luego, generar el contenido detallado del curso (Usando Google API)
-        # Mantener los prompts originales, combinándolos para Google API
         content_system_message = f"""
         Eres un experto en diseño de cursos educativos. Tu tarea es crear un esquema detallado para un curso de nivel {level} sobre {topic}.
-
+        
         El curso debe incluir:
         1. Un título atractivo y descriptivo que refleje el nivel {level}
         2. {level_config['num_sections']} secciones principales, cada una con:
-           - Título descriptivo
+           - Título descriptivo que incluya el tema principal ({topic})
            - Descripción detallada del contenido
         3. Objetivos de aprendizaje específicos al nivel {level}
         4. Requisitos previos apropiados para el nivel
-
+        
         Para un curso de nivel {level}, asegúrate de:
         - {level_config['description']}
         - Mantener una profundidad {level_config['depth']} en los temas
         - Enfocarse en {level_config['focus']}
         - {f"Incluir ejercicios prácticos y proyectos" if level != "principiante" else "Incluir ejemplos simples y ejercicios guiados"}
         - {f"Cubrir temas especializados y técnicas avanzadas" if level in ["avanzado", "maestro"] else "Mantener un enfoque en conceptos fundamentales"}
-
-        IMPORTANTE: No incluyas ninguna referencia a videos, URLs o contenido multimedia en la respuesta.
-
+        
+        IMPORTANTE: 
+        1. No incluyas ninguna referencia a videos, URLs o contenido multimedia en la respuesta.
+        2. Cada título de sección DEBE incluir el tema principal ({topic}) para asegurar que los videos encontrados sean relevantes.
+        
         Proporciona la respuesta en formato JSON con la siguiente estructura:
         {{
             "title": "Título del curso",
             "sections": [
                 {{
-                    "title": "Título de la sección",
+                    "title": "Título de la sección (incluyendo {topic})",
                     "description": "Descripción detallada"
                 }}
-                // ... más secciones
             ],
             "learningOutcomes": ["Objetivo 1", "Objetivo 2", ...],
             "requirements": ["Requisito 1", "Requisito 2", ...],
@@ -390,38 +402,50 @@ def get_course_outline(prompt):
         content_user_message = f"Crea un curso sobre: {topic}"
         content_full_prompt = f"{content_system_message}\n\nUSER QUESTION:\n{content_user_message}"  # Combinar
 
-        # Reemplazo de llamada Azure -> Google
-        content_response_text = call_google_generative_api_for_text(content_full_prompt)
-        # Limpiar posible markdown añadido por la API
-        content_response_text = re.sub(r'^```json\s*', '', content_response_text).strip()
-        content_response_text = re.sub(r'\s*```$', '', content_response_text).strip()
-        content_data = json.loads(content_response_text)  # Parsear el JSON devuelto por la IA
+        intro_data = None
+        content_data = None
 
-        # Combinar la introducción con el contenido del curso (sin cambios)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_outline) as executor:
+            future_intro = executor.submit(call_google_generative_api_for_text, intro_full_prompt)
+            future_content = executor.submit(call_google_generative_api_for_text, content_full_prompt)
+
+            try:
+                intro_response_text = future_intro.result()
+                intro_response_text = re.sub(r'^```json\s*', '', intro_response_text).strip()
+                intro_response_text = re.sub(r'\s*```$', '', intro_response_text).strip()
+                intro_data = json.loads(intro_response_text)
+            except Exception as e_intro:
+                print(f"Error generando introducción del curso en paralelo: {e_intro}")
+                # Podríamos decidir si continuar sin introducción o lanzar el error
+                raise  # Por ahora, relanzamos si falla la introducción
+
+            try:
+                content_response_text = future_content.result()
+                content_response_text = re.sub(r'^```json\s*', '', content_response_text).strip()
+                content_response_text = re.sub(r'\s*```$', '', content_response_text).strip()
+                content_data = json.loads(content_response_text)
+            except Exception as e_content:
+                print(f"Error generando contenido del curso en paralelo: {e_content}")
+                # Podríamos decidir si continuar sin contenido o lanzar el error
+                raise # Por ahora, relanzamos si falla el contenido
+        
+        # Combinar la introducción con el contenido del curso
         course_outline = {
-            **content_data,
-            "introduction": intro_data["introduction"]
+            **content_data, # Asegurarse que content_data no sea None
+            "introduction": intro_data["introduction"], # Asegurarse que intro_data no sea None
+            "extracted_topic": topic
         }
-
-        # Añadir queries de búsqueda por defecto (esto estaba en tu código original implícitamente o añadido después, lo mantenemos si estaba antes)
-        # Si no estaba en el original que me diste, puedes quitar este bloque.
-        # Asumiendo que necesitas estas queries como en el ejemplo anterior:
+        
+        # Generar queries de búsqueda mejoradas
         course_outline["searchQueries"] = {
             "introductory": f"introducción a {topic} para {level}s",
-            **{f"section{i}": f"{section['title']} tutorial {level}" for i, section in
-               enumerate(course_outline["sections"])}
+            **{f"section{i}": f"{section['title']} {topic} tutorial {level}" for i, section in enumerate(course_outline["sections"])}
         }
-
+        
         return course_outline
-
-    # Mantener el manejo de errores original
+                
     except Exception as e:
         print(f"Error generando esquema del curso: {e}")
-        # Considera loguear el texto recibido si falla el json.loads
-        if 'intro_response_text' in locals() and isinstance(e, json.JSONDecodeError):
-            print("Texto recibido (intro):", intro_response_text)
-        if 'content_response_text' in locals() and isinstance(e, json.JSONDecodeError):
-            print("Texto recibido (content):", content_response_text)
         raise
 
 
@@ -574,16 +598,19 @@ def search_youtube_videos(query, max_results=4, section_content="", used_video_i
     if used_video_ids is None:
         used_video_ids = set()
 
+    # Determinar el número de hilos
+    max_workers = min(32, (os.cpu_count() or 1) * 2)
+
     try:
         youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 
-        # Primera búsqueda con licencia YouTube, retrieving up to 50 videos
+        # Primera búsqueda con licencia YouTube, retrieving up to 10 videos (antes 50)
         request_youtube = youtube.search().list(
             part="snippet",
             q=query,
             type="video",
             videoLicense="creativeCommon",
-            maxResults=50,
+            maxResults=10,  # Cambiado de 50 a 10
             relevanceLanguage="es",
             videoDuration="medium",
             order="relevance"
@@ -662,20 +689,27 @@ def search_youtube_videos(query, max_results=4, section_content="", used_video_i
 
                 all_videos_data.append(video_data)
 
-            # Ordenar los videos por score y tomar los 10 mejores
+            # Ordenar los videos por score y tomar los 5 mejores (antes 10)
             sorted_videos = sorted(all_videos_data, key=lambda x: x["score"], reverse=True)
-            top_10_videos = sorted_videos[:10]
+            top_5_videos = sorted_videos[:5] # Cambiado de top_10_videos a top_5_videos y slice a :5
 
-            # Procesar las transcripciones de los 10 mejores videos
-            for video in top_10_videos:
-                transcript = get_video_transcript(video["videoId"])
-                if transcript:
-                    video["processed_transcript"] = transcript
-                else:
-                    # Si no se puede obtener la transcripción, remover el video
-                    top_10_videos.remove(video)
-
-            return top_10_videos
+            # Procesar las transcripciones de los 5 mejores videos en paralelo
+            videos_with_transcripts = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_video = {executor.submit(get_video_transcript, video["videoId"]): video for video in top_5_videos} # Usar top_5_videos
+                for future in concurrent.futures.as_completed(future_to_video):
+                    video = future_to_video[future]
+                    try:
+                        transcript = future.result()
+                        if transcript:
+                            video["processed_transcript"] = transcript
+                            videos_with_transcripts.append(video)
+                        else:
+                            print(f"Video {video['videoId']} descartado: No se pudo obtener transcripción en el procesamiento paralelo.")
+                    except Exception as exc:
+                        print(f"Error obteniendo transcripción para {video['videoId']} en paralelo: {exc}")
+            
+            return videos_with_transcripts # Devolver solo los videos con transcripción exitosa
 
         return []
 
@@ -684,33 +718,39 @@ def search_youtube_videos(query, max_results=4, section_content="", used_video_i
         return []
 
 
-def analyze_video_content(video_id, section_content, used_video_ids):
+def analyze_video_content(video_id, section_content, used_video_ids, course_topic, video_youtube_title, processed_transcript_text=None):
     """Analiza si el contenido del video es relevante para la sección usando Google API"""
     if video_id in used_video_ids:
-        return False, "Video ya usado en otra sección"
+        return False, "Video ya usado en otra sección", None
 
+    analysis_response_json = None 
     try:
-        # Obtener la transcripción procesada del video
-        transcript = get_video_transcript(video_id)
+        transcript = processed_transcript_text
         if not transcript:
-            return False, "No se pudo obtener la transcripción"
+            print(f"No se proveyó transcripción para {video_id} (Título: '{video_youtube_title}', Tema Curso: '{course_topic}'), obteniéndola ahora...")
+            transcript = get_video_transcript(video_id)
+            if not transcript:
+                return False, "No se pudo obtener la transcripción", None
 
-        # Preparar el prompt para la IA con todas las transcripciones procesadas
-        system_message = """
-        Eres un experto en análisis de contenido educativo. Tu tarea es determinar si el contenido de un video es relevante para una sección específica de un curso.
+        # Preparar el prompt para la IA 
+        system_message = f"""
+        Eres un experto en análisis de contenido educativo. Tu tarea es determinar si el contenido de un video (considerando su título original de YouTube y su transcripción) es relevante para una sección específica de un curso sobre '{course_topic}'.
 
         Debes analizar:
-        1. Si el contenido del video coincide con el tema de la sección
-        2. Si el nivel de profundidad es apropiado
-        3. Si la información es precisa y relevante
-        4. Si el video cubre los conceptos principales mencionados en la descripción de la sección
+        1. Si el contenido del video (título y transcripción) coincide con el tema de la sección descrito abajo.
+        2. Si el nivel de profundidad es apropiado.
+        3. Si la información es precisa y relevante para '{course_topic}'.
+        4. Si el video (título y transcripción) cubre los conceptos principales mencionados en la descripción de la sección, en el contexto de '{course_topic}'.
+        5. Crucialmente, verifica que el video (título y transcripción) trate específicamente sobre '{course_topic}' y no sobre temas relacionados pero distintos.
 
         Responde con un JSON que contenga:
-        {
+        {{
             "is_relevant": true/false,
             "confidence_score": numero entre 0 y 1,
-            "reason": "explicación detallada de por qué el video es o no relevante"
-        }
+            "reason": "explicación detallada de por qué el video es o no relevante, considerando específicamente el tema del curso '{course_topic}', el título del video y su transcripción.",
+            "topic_match": true/false, # True si el video (título y transcripción) es sobre '{course_topic}', False en caso contrario.
+            "topic_match_score": numero entre 0 y 1 # Confianza en que el video (título y transcripción) trata sobre '{course_topic}'
+        }}
         """
 
         user_message = f"""
@@ -718,6 +758,9 @@ def analyze_video_content(video_id, section_content, used_video_ids):
 
         Título y descripción de la sección:
         {section_content}
+
+        Título original del video de YouTube:
+        {video_youtube_title}
 
         Transcripción procesada del video:
         {transcript}
@@ -728,26 +771,34 @@ def analyze_video_content(video_id, section_content, used_video_ids):
         analysis_response_text = call_google_generative_api_for_text(analysis_full_prompt)
         analysis_response_text = re.sub(r'^```json\s*', '', analysis_response_text).strip()
         analysis_response_text = re.sub(r'\s*```$', '', analysis_response_text).strip()
-        analysis = json.loads(analysis_response_text)
+        analysis_response_json = json.loads(analysis_response_text)
 
-        if analysis.get("confidence_score", 0) < 0.7:
-            print(
-                f"Análisis video {video_id}: Rechazado por baja confianza ({analysis.get('confidence_score', 0):.2f}). Razón: {analysis.get('reason', 'N/A')}")
-            return False, f"Contenido no suficientemente relevante (Confianza < 0.7): {analysis.get('reason', 'Sin razón específica')}"
+        # Verificar si el tema coincide específicamente
+        if not analysis_response_json.get("topic_match", False):
+            print(f"Análisis video {video_id}: Rechazado por tema incorrecto. Razón: {analysis_response_json.get('reason', 'N/A')}")
+            return False, f"El video no trata específicamente del tema correcto: {analysis_response_json.get('reason', 'Sin razón específica')}", analysis_response_json
 
-        if analysis.get("is_relevant", False):
-            print(
-                f"Análisis video {video_id}: Aprobado (Confianza: {analysis.get('confidence_score', 0):.2f}). Razón: {analysis.get('reason', 'N/A')}")
-            return True, f"Video aprobado por análisis de contenido. {analysis.get('reason', 'Análisis exitoso')}"
+        # Si el tema coincide pero la confianza es baja, aún podríamos aceptarlo como último recurso
+        if analysis_response_json.get("confidence_score", 0) < 0.7:
+            if analysis_response_json.get("topic_match_score", 0) >= 0.8:  # Si el tema coincide bien
+                print(f"Análisis video {video_id}: Aceptado con baja confianza pero tema correcto (Confianza: {analysis_response_json.get('confidence_score', 0):.2f})")
+                return True, f"Video aceptado como alternativa. {analysis_response_json.get('reason', 'Análisis exitoso')}", analysis_response_json
+            else:
+                print(f"Análisis video {video_id}: Rechazado por baja confianza ({analysis_response_json.get('confidence_score', 0):.2f}). Razón: {analysis_response_json.get('reason', 'N/A')}")
+                return False, f"Contenido no suficientemente relevante (Confianza < 0.7): {analysis_response_json.get('reason', 'Sin razón específica')}", analysis_response_json
+
+        if analysis_response_json.get("is_relevant", False):
+            print(f"Análisis video {video_id}: Aprobado (Confianza: {analysis_response_json.get('confidence_score', 0):.2f}). Razón: {analysis_response_json.get('reason', 'N/A')}")
+            return True, f"Video aprobado por análisis de contenido. {analysis_response_json.get('reason', 'Análisis exitoso')}", analysis_response_json
         else:
-            print(f"Análisis video {video_id}: Rechazado por IA. Razón: {analysis.get('reason', 'N/A')}")
-            return False, f"Contenido no relevante según análisis: {analysis.get('reason', 'IA determinó no relevante')}"
+            print(f"Análisis video {video_id}: Rechazado por IA. Razón: {analysis_response_json.get('reason', 'N/A')}")
+            return False, f"Contenido no relevante según análisis: {analysis_response_json.get('reason', 'IA determinó no relevante')}", analysis_response_json
 
     except Exception as e:
         print(f"Error en el análisis de contenido para {video_id}: {e}")
         if 'analysis_response_text' in locals() and isinstance(e, json.JSONDecodeError):
             print("Texto recibido (análisis):", analysis_response_text)
-        return False, f"Error durante el análisis de contenido: {str(e)}"
+        return False, f"Error durante el análisis de contenido: {str(e)}", analysis_response_json # Devolver analysis_response_json aunque haya error para inspección
 
 
 @app.route("/solicitar_cursos", methods=["POST"])
@@ -759,6 +810,9 @@ def solicitar_cursos():
 
         if not prompt:
             return jsonify({"error": "El prompt no puede estar vacío"}), 400
+        
+        # Determinar el número de hilos para análisis
+        max_workers = min(32, (os.cpu_count() or 1) * 2)
 
         # Verificar API keys al inicio
         if not GOOGLE_API_KEY or not YOUTUBE_API_KEY:
@@ -773,6 +827,10 @@ def solicitar_cursos():
         except Exception as e:
             print(f"Fallo crítico: No se pudo generar el esquema del curso. Error: {e}")
             return jsonify({"error": f"Error al generar la estructura base del curso: {str(e)}"}), 500
+
+        # Extraer el tema principal del esquema del curso
+        topic = course_outline.get("extracted_topic", prompt.split(' ')[0])
+        print(f"Tema principal extraído para la búsqueda de videos: '{topic}'")
 
         # Generate a random course ID (lógica original)
         course_id = f"course_{int(time.time())}"  # No estaba en el original explícitamente, pero útil
@@ -797,15 +855,31 @@ def solicitar_cursos():
             used_video_ids=used_video_ids
         )
 
-        # Process the list of intro videos: analyze with AI and filter
+        # Process the list of intro videos: analyze with AI and filter in parallel
         approved_intro_videos = []
-        print(f"Analizando {len(all_intro_videos_data)} videos para la introducción...")
-        for video_data in all_intro_videos_data:
-            is_approved, reason = analyze_video_content(video_data["videoId"], course_outline.get("introduction", ""),
-                                                        used_video_ids)
-            if is_approved:
-                approved_intro_videos.append(video_data)
-
+        print(f"Analizando {len(all_intro_videos_data)} videos para la introducción con hasta {max_workers} hilos...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_video_intro = {
+                executor.submit(
+                    analyze_video_content, 
+                    video_data["videoId"], 
+                    course_outline.get("introduction", ""), 
+                    used_video_ids,
+                    topic, 
+                    video_data.get("title"), # Pasar el título del video de YouTube
+                    video_data.get("processed_transcript") 
+                ): video_data
+                for video_data in all_intro_videos_data
+            }
+            for future in concurrent.futures.as_completed(future_to_video_intro):
+                video_data = future_to_video_intro[future]
+                try:
+                    is_approved, reason, _ = future.result() # Ignoramos el analysis_json aquí, solo nos importa si se aprobó para la lista de introducción
+                    if is_approved:
+                        approved_intro_videos.append(video_data)
+                except Exception as exc:
+                    print(f"Error analizando video de introducción {video_data['videoId']} en paralelo: {exc}")
+        
         # Select the best intro video from the approved list
         if approved_intro_videos:
             # Sort approved videos by score and select the best one
@@ -838,19 +912,51 @@ def solicitar_cursos():
             section_id = i + 1
             print(f"Procesando Sección {section_id}: {section.get('title', 'Sin Título')}")
 
-            # Get search query for this section (lógica original)
-            section_query_key = f"section{i}"
-            # Query original o fallback simple
-            default_query = f"{section.get('title', '')} {prompt.split(' ')[0]}"
-            section_query = course_outline.get("searchQueries", {}).get(section_query_key, default_query)
+            section_title_full = section.get('title', '')
+            
+            # Lógica de simplificación de la consulta principal
+            # Intenta tomar la parte antes de los dos puntos, o las primeras palabras clave significativas
+            simplified_title_parts = section_title_full.split(':')[0].strip()
+            # Si la simplificación resulta en algo muy corto o es igual al título completo (sin :), tomar primeras 3-4 palabras
+            if not simplified_title_parts or len(simplified_title_parts.split()) < 2 or simplified_title_parts == section_title_full:
+                simplified_title_parts = ' '.join(section_title_full.split()[:4]).strip()
+            
+            # Construir la consulta principal simplificada con el topic
+            if topic.lower() in simplified_title_parts.lower():
+                section_query = simplified_title_parts
+            else:
+                section_query = f"{simplified_title_parts} {topic}"
+            section_query = section_query.strip()
 
-            # Use search_youtube_videos to get a list of potential section videos (up to 50)
+            print(f"Buscando videos para Sección {section_id} con query principal simplificada: '{section_query}'")
             all_section_videos_data = search_youtube_videos(
                 section_query,
-                # max_results is no longer used for filtering here
                 section_content=section.get("description", ""),
                 used_video_ids=used_video_ids
             )
+
+            if not all_section_videos_data:
+                # Alternativa 1: Usar el título completo de la sección + topic (más específico que la simplificada)
+                alt_query_1 = f"{section_title_full} {topic}".strip()
+                print(f"Query simplificada falló. Intentando alternativa 1 (título completo) para Sección {section_id}: '{alt_query_1}'")
+                all_section_videos_data = search_youtube_videos(
+                    alt_query_1,
+                    section_content=section.get("description", ""),
+                    used_video_ids=used_video_ids
+                )
+
+                if not all_section_videos_data:
+                    # Alternativa 2: Usar solo el topic y el nivel (muy general)
+                    alt_query_2 = f"{topic} {course_outline.get('level', 'principiante')}".strip()
+                    print(f"Alternativa 1 falló. Intentando alternativa 2 (solo tema y nivel) para Sección {section_id}: '{alt_query_2}'")
+                    all_section_videos_data = search_youtube_videos(
+                        alt_query_2,
+                        section_content=section.get("description", ""), # Aún pasamos la descripción por si ayuda a la puntuación interna de search_youtube_videos
+                        used_video_ids=used_video_ids
+                    )
+            
+            if not all_section_videos_data:
+                print(f"Todas las consultas de búsqueda fallaron para la Sección {section_id}. No hay videos para analizar.")
 
             section_data = {
                 "id": section_id,
@@ -863,14 +969,34 @@ def solicitar_cursos():
                 "videoTitle": None,
             }
 
-            # Process the list of section videos: analyze with AI and filter
+            # Process the list of section videos: analyze with AI and filter in parallel
             approved_section_videos = []
-            print(f"Analizando {len(all_section_videos_data)} videos para la Sección {section_id}...")
-            for video_data in all_section_videos_data:
-                is_approved, reason = analyze_video_content(video_data["videoId"], section.get("description", ""),
-                                                            used_video_ids)
-                if is_approved:
-                    approved_section_videos.append(video_data)
+            all_analyzed_videos_with_ai_results = [] # Nueva lista para guardar todos los resultados de IA
+
+            print(f"Analizando {len(all_section_videos_data)} videos para la Sección {section_id} con hasta {max_workers} hilos...")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_video_section = {
+                    executor.submit(
+                        analyze_video_content, 
+                        video_data["videoId"], 
+                        section.get("description", ""), 
+                        used_video_ids,
+                        topic, 
+                        video_data.get("title"), # Pasar el título del video de YouTube
+                        video_data.get("processed_transcript") 
+                    ): video_data
+                    for video_data in all_section_videos_data
+                }
+                for future in concurrent.futures.as_completed(future_to_video_section):
+                    video_data = future_to_video_section[future]
+                    try:
+                        is_approved, reason, analysis_details = future.result()
+                        if is_approved:
+                            approved_section_videos.append(video_data)
+                        if analysis_details: # Guardar siempre que haya detalles de análisis
+                            all_analyzed_videos_with_ai_results.append((video_data, analysis_details))
+                    except Exception as exc:
+                        print(f"Error analizando video de sección {video_data['videoId']} en paralelo: {exc}")
 
             # Select the best section video from the approved list
             if approved_section_videos:
@@ -881,12 +1007,40 @@ def solicitar_cursos():
                     "duration": best_video["duration"],
                     "videoId": best_video["videoId"],
                     "videoTitle": best_video["title"],
+                    "videoUrl": f"https://www.youtube.com/embed/{best_video['videoId']}"
                 })
                 # Acumular duración en minutos si existe
                 total_minutes_calculation += best_video.get("totalMinutes", 0)
-                print(f"Video encontrado para sección {section_id}: {best_video['videoId']}")
+                print(f"Video encontrado para sección {section_id}: {best_video['videoId']} (Aprobado por IA y mejor score)")
+            elif all_analyzed_videos_with_ai_results: # Si no hay aprobados, usar fallback con el mayor confidence_score de IA
+                print(f"Advertencia: No se encontró video aprobado por IA para la sección {section_id}. Usando fallback por confidence_score de IA.")
+                
+                # Filtrar videos ya usados
+                available_for_fallback = [
+                    (vid_data, analysis)
+                    for vid_data, analysis in all_analyzed_videos_with_ai_results
+                    if vid_data["videoId"] not in used_video_ids
+                ]
+
+                if available_for_fallback:
+                    # Ordenar por confidence_score descendente
+                    available_for_fallback.sort(key=lambda x: x[1].get('confidence_score', 0), reverse=True)
+                    
+                    best_fallback_video_data, best_fallback_analysis = available_for_fallback[0]
+                    
+                    used_video_ids.add(best_fallback_video_data["videoId"])
+                    section_data.update({
+                        "duration": best_fallback_video_data["duration"],
+                        "videoId": best_fallback_video_data["videoId"],
+                        "videoTitle": best_fallback_video_data["title"],
+                        "videoUrl": f"https://www.youtube.com/embed/{best_fallback_video_data['videoId']}"
+                    })
+                    total_minutes_calculation += best_fallback_video_data.get("totalMinutes", 0)
+                    print(f"Video de fallback seleccionado para sección {section_id}: {best_fallback_video_data['videoId']} (Confidence IA: {best_fallback_analysis.get('confidence_score', 0):.2f})")
+                else:
+                    print(f"No se encontró video de fallback adecuado (todos los analizados ya fueron usados o no hubo análisis) para la sección {section_id}")
             else:
-                print(f"Advertencia: No se encontró video para la sección {section_id}")
+                print(f"No se encontró video aprobado por IA ni resultados de análisis para la sección {section_id}")
                 # La sección se añade sin video
 
             sections.append(section_data)
