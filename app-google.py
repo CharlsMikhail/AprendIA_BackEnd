@@ -1162,8 +1162,7 @@ import secrets
 import uuid
 import json
 from db import DatabaseConnection  # Importa tu clase singleton
-import os
-from dotenv import load_dotenv
+
 
 # Cargar variables de entorno
 load_dotenv()
@@ -1175,12 +1174,16 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(16))
 oauth = OAuth(app)
 google = oauth.register(
     name='google',
-    client_id=os.getenv('GOOGLE_CLIENT_ID'),
-    client_secret=os.getenv('GOOGLE_CLIENT_SECRET'),
-    server_metadata_url='https://accounts.google.com/.well-known/openid_configuration',
-    client_kwargs={
-        'scope': 'openid email profile'
-    }
+    client_id=os.environ.get("GOOGLE_CLIENT_ID"),
+    client_secret=os.environ.get("GOOGLE_CLIENT_SECRET"),
+    access_token_url='https://oauth2.googleapis.com/token',
+    access_token_params=None,
+    authorize_url='https://accounts.google.com/o/oauth2/v2/auth',
+    authorize_params=None,
+    api_base_url='https://www.googleapis.com/oauth2/v3/',
+    userinfo_endpoint='https://openidconnect.googleapis.com/v1/userinfo',
+    jwks_uri='https://www.googleapis.com/oauth2/v3/certs',
+    client_kwargs={'scope': 'openid email profile'},
 )
 
 # Instancia del singleton de base de datos
