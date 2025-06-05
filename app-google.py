@@ -41,7 +41,8 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # Añadido
 
 # --- Google Generative AI API Configuration ---
 # Puedes cambiar 'gemini-1.5-flash-latest' si necesitas otro modelo
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-latest")
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash-preview-05-20")
+#GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash-latest")
 GOOGLE_API_URL_TEMPLATE = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL_NAME}:generateContent"
 
 # Descargar recursos necesarios de NLTK
@@ -871,12 +872,12 @@ def process_section_parallel(section_data, section_index, topic, used_video_ids,
     print(f"Procesando Sección {section_id}: {section_data.get('title', 'Sin Título')}")
 
     section_title_full = section_data.get('title', '')
-    
+            
     # Lógica de simplificación de la consulta principal
     simplified_title_parts = section_title_full.split(':')[0].strip()
     if not simplified_title_parts or len(simplified_title_parts.split()) < 2 or simplified_title_parts == section_title_full:
         simplified_title_parts = ' '.join(section_title_full.split()[:4]).strip()
-    
+            
     # Construir la consulta principal simplificada con el topic
     if topic.lower() in simplified_title_parts.lower():
         section_query = simplified_title_parts
@@ -910,7 +911,7 @@ def process_section_parallel(section_data, section_index, topic, used_video_ids,
                 section_content=section_data.get("description", ""),
                 used_video_ids=used_video_ids
             )
-
+            
     section_result = {
         "id": section_id,
         "title": section_data.get("title", f"Sección {section_id}"),
