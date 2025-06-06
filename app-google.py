@@ -1303,6 +1303,64 @@ def login():
     return google.authorize_redirect(redirect_uri)
 
 
+@app.route('/login/credentials', methods=['POST'])
+def login_credentials():
+    """Autenticación con email y contraseña"""
+    try:
+        # Obtener datos del request
+        data = request.get_json()
+        if not data or 'email' not in data or 'password' not in data:
+            return jsonify({'error': 'Email y contraseña son requeridos'}), 400
+
+        email = data['email']
+        password = data['password']
+
+        # Buscar usuario por email
+        user_result = db.execute_query(
+            """SELECT id_usuario, nombre_usuario, correo, contrasena_hash, 
+                      nombre_completo, token, creado_en, actualizado_en 
+               FROM usuarios WHERE correo = %s""",
+            (email,)
+        )
+
+        if not user_result:
+            return jsonify({'error': 'Credenciales inválidas'}), 401
+
+        user_data = user_result[0]
+        stored_password_hash = user_data[3]
+
+        # Verificar contraseña (comparación directa)
+        if stored_password_hash != password:
+            return jsonify({'error': 'Credenciales inválidas'}), 401
+
+        # Generar nuevo token
+        new_token = generate_token()
+
+        # Actualizar token en la base de datos
+        db.execute_query(
+            "UPDATE usuarios SET token = %s, actualizado_en = CURRENT_TIMESTAMP WHERE id_usuario = %s",
+            (new_token, user_data[0]),
+            fetch=False
+        )
+
+        # Retornar datos del usuario
+        return jsonify({
+            'success': True,
+            'user': {
+                'id_usuario': user_data[0],
+                'nombre_usuario': user_data[1],
+                'correo': user_data[2],
+                'nombre_completo': user_data[4],
+                'token': new_token,
+                'creado_en': user_data[6].isoformat() if user_data[6] else None,
+                'actualizado_en': user_data[7].isoformat() if user_data[7] else None
+            }
+        }), 200
+
+    except Exception as e:
+        print(f"Error en login_credentials: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
 @app.route('/auth/callback')
 def auth_callback():
     """Callback de Google OAuth"""
