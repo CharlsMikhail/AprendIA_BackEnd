@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 import os
 import json
 import re
@@ -1297,6 +1297,7 @@ def require_auth():
 # ENDPOINTS DE AUTENTICACIÓN
 
 @app.route('/login')
+@cross_origin()
 def login():
     """Inicia el proceso de autenticación con Google"""
     redirect_uri = url_for('auth_callback', _external=True)
@@ -1304,6 +1305,7 @@ def login():
 
 
 @app.route('/login/credentials', methods=['POST'])
+@cross_origin()
 def login_credentials():
     """Autenticación con email y contraseña"""
     try:
