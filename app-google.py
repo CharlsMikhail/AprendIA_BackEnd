@@ -801,9 +801,9 @@ Debes analizar:
 IMPORTANTE: El título debe ser del tema correcto (por ejemplo, si la sección es de variables en Java, rechaza si el título es de variables en C++ o C).
 
 Asigna un score de relevancia total considerando:
-- Título: 40%
-- Transcripción: 30%
-- Sentimiento de comentarios: 30%
+- Título: 30%
+- Transcripción: 50%
+- Sentimiento de comentarios: 20%
 
 Responde con un JSON que contenga:
 {{
@@ -959,6 +959,7 @@ def get_comments_parallel(video_id, max_results=50):
         return []
 
 @app.route("/solicitar_cursos", methods=["POST"])
+@cross_origin()
 def solicitar_cursos():
     try:
         data = request.json
@@ -1140,6 +1141,7 @@ def solicitar_cursos():
 
 # Add a health check endpoint (SIN CAMBIOS)
 @app.route("/health", methods=["GET"])
+@cross_origin()
 def health_check():
     # Chequeo básico original
     youtube_ok = bool(YOUTUBE_API_KEY)
@@ -1155,21 +1157,16 @@ def health_check():
     status_code = 200 if status["status"] == "ok" else 503
     return jsonify(status), status_code
 
-
-from flask import Flask, request, jsonify, redirect, url_for, session
+from flask import request, jsonify, redirect, url_for, session
 from authlib.integrations.flask_client import OAuth
-from datetime import datetime, timedelta
+from datetime import datetime
 import secrets
-import uuid
 import json
 from db import DatabaseConnection  # Importa tu clase singleton
 
 
 # Cargar variables de entorno
 load_dotenv()
-
-app = Flask(__name__)
-app.secret_key = os.getenv('FLASK_SECRET_KEY', secrets.token_hex(16))
 
 # Configuración de OAuth con Google
 oauth = OAuth(app)
@@ -1364,6 +1361,7 @@ def login_credentials():
         return jsonify({'error': 'Error interno del servidor'}), 500
 
 @app.route('/auth/callback')
+@cross_origin()
 def auth_callback():
     """Callback de Google OAuth"""
     try:
@@ -1388,6 +1386,7 @@ def auth_callback():
 
 
 @app.route('/dashboard')
+@cross_origin()
 def dashboard():
     """Dashboard principal (requiere autenticación)"""
     if 'user_token' not in session:
@@ -1414,6 +1413,7 @@ def dashboard():
 
 
 @app.route('/logout')
+@cross_origin()
 def logout():
     """Cerrar sesión"""
     session.clear()
@@ -1424,6 +1424,7 @@ def logout():
 
 @app.route('/api/cursos', methods=['GET'])
 @require_auth()
+@cross_origin()
 def get_cursos():
     """Obtiene la lista de cursos del usuario autenticado"""
     try:
@@ -1469,6 +1470,7 @@ def get_cursos():
 
 @app.route('/api/cursos/<int:curso_id>', methods=['GET'])
 @require_auth()
+@cross_origin()
 def get_curso_detalle(curso_id):
     """Obtiene el detalle completo de un curso específico"""
     try:
@@ -1575,6 +1577,7 @@ def get_curso_detalle(curso_id):
 
 @app.route('/api/cursos', methods=['POST'])
 @require_auth()
+@cross_origin()
 def crear_curso():
     """Crea un nuevo curso con todas sus dependencias"""
     try:
@@ -1738,6 +1741,7 @@ def crear_curso():
 # Endpoint adicional para obtener información del usuario autenticado
 @app.route('/api/user/me', methods=['GET'])
 @require_auth()
+@cross_origin()
 def get_current_user():
     """Obtiene información del usuario autenticado"""
     return jsonify({
