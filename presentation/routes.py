@@ -42,16 +42,14 @@ def solicitar_cursos():
 
         user_id = auth_service.get_current_user()
 
-        course = course_pipeline.generate_course(prompt, user_id)
+        # Inicia el proceso de forma asíncrona devolviendo el job_id
+        job_id = course_pipeline.iniciar_generacion(prompt, user_id)
 
-        # Convertir a dict para JSON
-        course_dict = asdict(course)
-
-        # Si el usuario está logueado, guardar el curso en su historial
-        if user_id:
-            user_repo.save_course_history(user_id, course_dict)
-
-        return jsonify(course_dict)
+        return jsonify({
+            "message": "Generación de curso en progreso",
+            "job_id": job_id,
+            "status": "processing"
+        }), 202
 
     except Exception as e:
         import traceback

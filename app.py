@@ -1,10 +1,14 @@
 from flask import Flask
 from flask_cors import CORS
+from flask_socketio import SocketIO
 from dotenv import load_dotenv
 import os
 
 # Cargar variables de entorno
 load_dotenv()
+
+# Inicializamos SocketIO de manera global para que otros módulos puedan importarlo
+socketio = SocketIO(cors_allowed_origins="*")
 
 def create_app():
     app = Flask(__name__)
@@ -17,8 +21,26 @@ def create_app():
     from presentation.routes import api_bp
     app.register_blueprint(api_bp)
 
+    from presentation.api.colab_webhooks_controller import colab_bp
+    app.register_blueprint(colab_bp)
+
+    from presentation.api.auth_controller import auth_bp, infra_bp
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(infra_bp)
+
+    from presentation.api.users_controller import users_bp
+    app.register_blueprint(users_bp)
+
+    from presentation.api.course_controller import courses_bp, community_bp
+    app.register_blueprint(courses_bp)
+    app.register_blueprint(community_bp)
+
+    # Conectar la app con SocketIO
+    socketio.init_app(app)
+
     return app
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(debug=True, port=5000)
+    # Usar socketio.run en lugar de app.run para soportar WebSockets
+    socketio.run(app, debug=True, port=5000)
