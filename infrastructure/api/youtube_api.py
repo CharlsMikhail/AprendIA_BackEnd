@@ -12,7 +12,30 @@ class YouTubeAPIClient:
     def __init__(self):
         self.youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 
-    def search_videos(self, query, section_content="", used_video_ids=None):
+    def search_videos(self, query: str, section_content: str = "", used_video_ids: set = None, max_results=10) -> list:
+        # --- INICIO MOCK FASE 1 ---
+        import logging
+        logging.info(f"MOCK YOUTUBE: Buscando videos para '{query}'")
+        import random
+        mock_candidates = []
+        for i in range(3):
+            vid = f"mock_vid_{random.randint(1000, 9999)}"
+            mock_candidates.append({
+                "videoId": vid,
+                "title": f"Video mockeado para {query} Parte {i+1}",
+                "description": f"Descripción simulada del video {i+1}",
+                "url": f"https://www.youtube.com/watch?v={vid}",
+                "channelTitle": "Mock Channel",
+                "publishedAt": "2023-01-01T00:00:00Z",
+                "duration": f"{random.randint(5, 20)}m",
+                "total_minutes": random.randint(5, 20),
+                "views": random.randint(100, 10000),
+                "likes": random.randint(10, 1000),
+                "commentCount": random.randint(5, 100)
+            })
+        return mock_candidates
+        # --- FIN MOCK FASE 1 ---
+
         """Search for YouTube videos based on query and return the best match"""
         if used_video_ids is None:
             used_video_ids = set()

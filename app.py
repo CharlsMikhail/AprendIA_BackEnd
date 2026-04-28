@@ -7,8 +7,7 @@ import os
 # Cargar variables de entorno
 load_dotenv()
 
-# Inicializamos SocketIO de manera global para que otros módulos puedan importarlo
-socketio = SocketIO(cors_allowed_origins="*")
+from presentation.extensions import socketio
 
 def create_app():
     app = Flask(__name__)
@@ -17,10 +16,7 @@ def create_app():
     # Necesario para las sesiones de Flask requeridas por OAuth2
     app.secret_key = os.getenv("FLASK_SECRET_KEY", "super_secret_default_key")
 
-    # Registrar el blueprint de la API
-    from presentation.routes import api_bp
-    app.register_blueprint(api_bp)
-
+    # Ya no usamos api_bp, todo está distribuido en controladores de la carpeta api/
     from presentation.api.colab_webhooks_controller import colab_bp
     app.register_blueprint(colab_bp)
 
@@ -34,6 +30,9 @@ def create_app():
     from presentation.api.course_controller import courses_bp, community_bp
     app.register_blueprint(courses_bp)
     app.register_blueprint(community_bp)
+
+    from presentation.api.course_generation_controller import course_gen_bp
+    app.register_blueprint(course_gen_bp)
 
     # Conectar la app con SocketIO
     socketio.init_app(app)

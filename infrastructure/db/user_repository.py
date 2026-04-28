@@ -5,7 +5,7 @@ import logging
 class UserRepository:
     def __init__(self):
         self.db = DatabaseConnection()
-        self._initialize_tables()
+        # self._initialize_tables() # Desactivado: El esquema se maneja en ideadb.sql
 
     def _initialize_tables(self):
         query = """

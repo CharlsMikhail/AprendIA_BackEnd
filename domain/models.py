@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 
@@ -60,3 +60,19 @@ class Course:
     level: str
     level_description: str
     user_id: Optional[int] = None
+
+@dataclass
+class CourseJob:
+    """
+    Representa el estado de un trabajo de generación de curso.
+    Actúa como máquina de estados entre el pipeline local y los Colabs externos.
+    """
+    job_id: str
+    prompt: str
+    status: str = "pending"
+    user_id: Optional[int] = None
+    course_outline: Optional[Dict[str, Any]] = None
+    sections_with_candidates: Optional[List[Dict[str, Any]]] = None
+    final_course: Optional["Course"] = None
+    error_message: Optional[str] = None
+    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())

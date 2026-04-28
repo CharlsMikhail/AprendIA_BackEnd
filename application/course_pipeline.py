@@ -4,15 +4,15 @@ import random
 from datetime import datetime
 from infrastructure.api.youtube_api import YouTubeAPIClient
 from infrastructure.api.colab_client import ColabClient
-from infrastructure.db.course_job_repository import CourseJobRepository
+from application.job_store import job_store
 from domain.models import Course, Section, CourseJob
-from app import socketio  # Asumiendo que podemos importarlo sin circular, si falla lo ajustaremos.
+from presentation.extensions import socketio
 
 class CoursePipeline:
     def __init__(self):
         self.yt_client = YouTubeAPIClient()
         self.colab_client = ColabClient()
-        self.job_repo = CourseJobRepository()
+        self.job_repo = job_store  # Usamos la memoria local por ahora
 
     def _emit_progress(self, job_id: str, percentage: int, message: str):
         """Emite actualizaciones por WebSocket al cliente conectado a la sala del job_id."""
