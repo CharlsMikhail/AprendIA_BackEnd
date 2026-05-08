@@ -39,10 +39,11 @@ class DatabaseConnection:
                 if not all(db_config.values()):
                     raise ValueError("Faltan credenciales de base de datos en el archivo .env")
 
-                # Crear pool de conexiones
+                # Crear pool de conexiones (sslmode=require para Neon)
                 self._connection_pool = psycopg2.pool.SimpleConnectionPool(
                     1,  # Mínimo de conexiones
                     20,  # Máximo de conexiones
+                    sslmode='require',
                     **db_config
                 )
 
@@ -53,18 +54,18 @@ class DatabaseConnection:
                 raise
 
     def get_connection(self):
-        """
-        Obtiene una conexión del pool
-        Returns:
-            psycopg2.connection: Conexión a la base de datos
-        """
+        """Obtiene una conexión viva del pool."""
         try:
             if self._connection_pool:
-                connection = self._connection_pool.getconn()
-                if connection:
-                    return connection
-                else:
-                    raise Exception("No se pudo obtener conexión del pool")
+                for _ in range(3):  # Reintentos si la conexión está muerta
+                    connection = self._connection_pool.getconn()
+                    if connection:
+                        if connection.closed != 0:
+                            # Si la conexión está cerrada, la descartamos
+                            self._connection_pool.putconn(connection, close=True)
+                            continue
+                        return connection
+                raise Exception("No se pudo obtener una conexión válida del pool")
             else:
                 raise Exception("Pool de conexiones no inicializado")
         except Exception as e:
@@ -72,14 +73,11 @@ class DatabaseConnection:
             raise
 
     def return_connection(self, connection):
-        """
-        Devuelve una conexión al pool
-        Args:
-            connection: Conexión a devolver al pool
-        """
+        """Devuelve una conexión al pool."""
         try:
             if self._connection_pool and connection:
-                self._connection_pool.putconn(connection)
+                close_conn = (connection.closed != 0)
+                self._connection_pool.putconn(connection, close=close_conn)
         except Exception as e:
             logging.error(f"Error al devolver conexión al pool: {e}")
 
@@ -93,15 +91,7 @@ class DatabaseConnection:
             logging.error(f"Error al cerrar conexiones: {e}")
 
     def execute_query(self, query, params=None, fetch=True):
-        """
-        Ejecuta una consulta SQL
-        Args:
-            query (str): Consulta SQL a ejecutar
-            params (tuple): Parámetros para la consulta
-            fetch (bool): Si True, retorna los resultados de SELECT
-        Returns:
-            list: Resultados de la consulta (si fetch=True)
-        """
+        """Ejecuta una consulta SQL"""
         connection = None
         cursor = None
         try:
@@ -115,32 +105,33 @@ class DatabaseConnection:
 
             if fetch:
                 results = cursor.fetchall()
-                connection.commit()
+                if connection.closed == 0:
+                    connection.commit()
                 return results
             else:
-                connection.commit()
+                if connection.closed == 0:
+                    connection.commit()
                 return cursor.rowcount
 
         except Exception as e:
-            if connection:
-                connection.rollback()
+            if connection and connection.closed == 0:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
             logging.error(f"Error ejecutando consulta: {e}")
             raise
         finally:
-            if cursor:
-                cursor.close()
+            if cursor and not cursor.closed:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
             if connection:
                 self.return_connection(connection)
 
     def execute_many(self, query, params_list):
-        """
-        Ejecuta múltiples consultas con diferentes parámetros
-        Args:
-            query (str): Consulta SQL a ejecutar
-            params_list (list): Lista de tuplas con parámetros
-        Returns:
-            int: Número de filas afectadas
-        """
+        """Ejecuta múltiples consultas con diferentes parámetros"""
         connection = None
         cursor = None
         try:
@@ -148,17 +139,24 @@ class DatabaseConnection:
             cursor = connection.cursor()
 
             cursor.executemany(query, params_list)
-            connection.commit()
+            if connection.closed == 0:
+                connection.commit()
             return cursor.rowcount
 
         except Exception as e:
-            if connection:
-                connection.rollback()
+            if connection and connection.closed == 0:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
             logging.error(f"Error ejecutando consultas múltiples: {e}")
             raise
         finally:
-            if cursor:
-                cursor.close()
+            if cursor and not cursor.closed:
+                try:
+                    cursor.close()
+                except Exception:
+                    pass
             if connection:
                 self.return_connection(connection)
 
@@ -178,13 +176,21 @@ class DatabaseConnectionManager:
         return self.cursor
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is not None:
-            self.connection.rollback()
-        else:
-            self.connection.commit()
+        if self.connection and self.connection.closed == 0:
+            try:
+                if exc_type is not None:
+                    self.connection.rollback()
+                else:
+                    self.connection.commit()
+            except psycopg2.InterfaceError:
+                pass
 
-        if self.cursor:
-            self.cursor.close()
+        if self.cursor and not self.cursor.closed:
+            try:
+                self.cursor.close()
+            except Exception:
+                pass
+                
         if self.connection:
             self.db.return_connection(self.connection)
 

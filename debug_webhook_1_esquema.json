@@ -1,0 +1,27 @@
+{
+    "job_id": "1a30fb64-966a-44b6-969c-c851aecae608",
+    "course_outline": {
+        "title": "Curso sobre Quiero aprender Go para web",
+        "introduction": "Introducción simulada por Mock Colab 1",
+        "sections": [
+            {
+                "title": "Módulo 1",
+                "description": "Intro básica",
+                "level": "principiante"
+            },
+            {
+                "title": "Módulo 2",
+                "description": "Práctica",
+                "level": "principiante"
+            }
+        ],
+        "learningOutcomes": [
+            "Aprenderás a mockear"
+        ],
+        "requirements": [
+            "Ganas de aprender"
+        ],
+        "level": "principiante",
+        "level_description": "Conceptos fundamentales"
+    }
+}

@@ -2,14 +2,11 @@ import os
 import requests
 import logging
 import threading
-import time
 
 class ColabClient:
     """
     Cliente para disparar tareas asíncronas en los notebooks de Google Colab.
-    (Versión Fase 1: MOCK LOCAL).
-    En lugar de hacer peticiones a Colab, levanta un hilo interno que tras unos segundos
-    hace un POST a localhost simulando que Colab está respondiendo.
+    (Versión PRODUCCIÓN - Envía peticiones reales a las URLs de Ngrok)
     """
     def __init__(self):
         self.secret_token = os.getenv("COLAB_SECRET_TOKEN", "AprendiaSecret2026")
@@ -18,73 +15,55 @@ class ColabClient:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.secret_token}"
         }
+        
+        # Leemos las URLs desde el .env. 
+        # Si tienes nombres específicos de endpoints (ej: /generar, /analizar), 
+        # puedes concatenarlos aquí.
+        self.outline_url = os.getenv("OUTLINE_GENERATOR_URL", "http://localhost:8001/generar_esquema")
+        self.sentiment_url = os.getenv("SENTIMENT_ANALYZER_URL", "http://localhost:8002/analizar_ranking")
 
     def trigger_outline_generation(self, job_id: str, prompt: str) -> bool:
         """
-        Simula enviar el prompt al Colab #1.
+        Envía el prompt al Colab #1 (Generación de Esquema).
         """
-        logging.info(f"MOCK COLAB #1: Iniciando generación para job {job_id} con prompt: {prompt}")
+        logging.info(f"COLAB REAL #1: Iniciando generación para job {job_id} en {self.outline_url}")
 
-        def mock_colab_1_work():
-            time.sleep(3) # Simulamos 3 segundos de procesamiento LLM
-            mock_outline = {
-                "title": f"Curso sobre {prompt}",
-                "introduction": "Introducción simulada por Mock Colab 1",
-                "sections": [
-                    {"title": "Módulo 1", "description": "Intro básica", "level": "principiante"},
-                    {"title": "Módulo 2", "description": "Práctica", "level": "principiante"}
-                ],
-                "learningOutcomes": ["Aprenderás a mockear"],
-                "requirements": ["Ganas de aprender"],
-                "level": "principiante",
-                "level_description": "Conceptos fundamentales"
-            }
-            
-            payload = {
-                "job_id": job_id,
-                "course_outline": mock_outline
-            }
+        payload = {
+            "job_id": job_id,
+            "prompt": prompt
+        }
+
+        def post_async():
             try:
-                requests.post("http://localhost:5000/colab/entregar_esquema", json=payload, headers=self.headers)
+                # Timeout de 10s solo para la conexión inicial, no esperamos la respuesta completa
+                # ya que Colab puede tardar y responderá mediante nuestro Webhook
+                response = requests.post(self.outline_url, json=payload, headers=self.headers, timeout=10)
+                logging.info(f"COLAB REAL #1 respondió con HTTP {response.status_code}")
             except Exception as e:
-                logging.error(f"Error en mock_colab_1 webhook: {e}")
+                logging.error(f"Error conectando al Colab #1 ({self.outline_url}): {e}")
 
-        # Arrancamos el hilo simulando la asincronía de la respuesta
-        threading.Thread(target=mock_colab_1_work).start()
+        # Ejecutamos la petición HTTP en background para no bloquear el API principal
+        threading.Thread(target=post_async).start()
         return True
 
     def trigger_ranking_analysis(self, job_id: str, candidates: list) -> bool:
         """
-        Simula enviar videos al Colab #2 para análisis de sentimiento.
+        Envía videos al Colab #2 (Análisis de sentimiento, RAG y Ranking final).
         """
-        logging.info(f"MOCK COLAB #2: Analizando {len(candidates)} candidatos para job {job_id}")
+        logging.info(f"COLAB REAL #2: Analizando candidatos para job {job_id} en {self.sentiment_url}")
+        
+        payload = {
+            "job_id": job_id,
+            "candidates": candidates
+        }
 
-        def mock_colab_2_work():
-            time.sleep(4) # Simulamos 4 segundos de descargas y procesamiento
-            
-            ranked_sections = []
-            for candidate_group in candidates:
-                best_video = None
-                if candidate_group.get("candidates"):
-                    best_video = candidate_group["candidates"][0] # Simple mock: agarrar el primero
-                    best_video["score"] = 98.5
-                    
-                ranked_sections.append({
-                    "is_intro": candidate_group.get("is_intro"),
-                    "section_id": candidate_group.get("section_id"),
-                    "title": candidate_group.get("title"),
-                    "description": candidate_group.get("description"),
-                    "best_video": best_video
-                })
-                
-            payload = {
-                "job_id": job_id,
-                "ranked_sections": ranked_sections
-            }
+        def post_async():
             try:
-                requests.post("http://localhost:5000/colab/entregar_ranking", json=payload, headers=self.headers)
+                # Hacemos POST a la URL de Ngrok
+                response = requests.post(self.sentiment_url, json=payload, headers=self.headers, timeout=10)
+                logging.info(f"COLAB REAL #2 respondió con HTTP {response.status_code}")
             except Exception as e:
-                logging.error(f"Error en mock_colab_2 webhook: {e}")
+                logging.error(f"Error conectando al Colab #2 ({self.sentiment_url}): {e}")
 
-        threading.Thread(target=mock_colab_2_work).start()
+        threading.Thread(target=post_async).start()
         return True

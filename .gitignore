@@ -14,7 +14,6 @@ __pycache__/
 
 # Configuraciones de Editores/IDEs
 .idea/
-.vscode/
 *.swp
 *.swo
 
@@ -31,3 +30,7 @@ __pycache__/
 
 # Carpetas de modelos locales de HuggingFace (Si los descargan en la raíz)
 models/
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore

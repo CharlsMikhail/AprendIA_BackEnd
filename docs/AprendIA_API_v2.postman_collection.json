@@ -1,0 +1,403 @@
+{
+  "info": {
+    "name": "AprendIA API v2.0",
+    "description": "Colección completa de endpoints para AprendIA Backend. Importa este archivo en Postman.\n\n**Setup:** \n1. Configura la variable `base_url` con tu servidor (ej: http://localhost:5000)\n2. Ejecuta primero 'Health Check' para verificar que el servidor está vivo\n3. El endpoint /auth/google requiere un id_token real de Google. Para pruebas locales, usa el endpoint de 'Mock Login' incluido.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "jwt_token",
+      "value": "",
+      "type": "string",
+      "description": "Se rellena automáticamente al hacer login"
+    },
+    {
+      "key": "job_id",
+      "value": "",
+      "type": "string",
+      "description": "Se rellena automáticamente al generar un curso"
+    }
+  ],
+  "item": [
+    {
+      "name": "🔧 Infraestructura",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/health",
+            "description": "Verifica que el servidor y la base de datos estén activos."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('DB conectada', () => {",
+                  "    const json = pm.response.json();",
+                  "    pm.expect(json.database).to.eql('connected');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🔐 Autenticación",
+      "item": [
+        {
+          "name": "POST /auth/google (con id_token real)",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/google",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id_token\": \"PEGA_AQUI_TU_GOOGLE_ID_TOKEN\"\n}"
+            },
+            "description": "Autentica al usuario con el id_token que genera Google Sign-In en el frontend.\nEl token JWT de AprendIA se guardará automáticamente en la variable {{jwt_token}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const json = pm.response.json();",
+                  "    pm.collectionVariables.set('jwt_token', json.access_token);",
+                  "    console.log('JWT guardado:', json.access_token.substring(0, 30) + '...');",
+                  "}",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tiene access_token', () => {",
+                  "    pm.expect(pm.response.json()).to.have.property('access_token');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /auth/me",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/auth/me",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Obtiene los datos del usuario autenticado. Requiere JWT válido."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tiene id_usuario', () => {",
+                  "    pm.expect(pm.response.json()).to.have.property('id_usuario');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /auth/logout",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/auth/logout",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Cierra sesión. El cliente debe eliminar el JWT localmente."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET /auth/me (sin token — debe fallar 401)",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/auth/me",
+            "description": "Prueba negativa: debe retornar 401 Unauthorized."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401 sin token', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "👤 Usuarios / Dashboard",
+      "item": [
+        {
+          "name": "GET /users/me/profile",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/users/me/profile",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Obtiene el perfil completo del usuario autenticado."
+          }
+        },
+        {
+          "name": "PATCH /users/me/profile",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/users/me/profile",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"MiNuevoUsuario\",\n  \"phone\": \"+51987654321\"\n}"
+            },
+            "description": "Actualiza el nombre de usuario y teléfono del perfil."
+          }
+        },
+        {
+          "name": "GET /users/me/stats",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/users/me/stats",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Estadísticas del usuario: cursos completados, fallidos, total generaciones."
+          }
+        },
+        {
+          "name": "GET /users/me/courses/recent",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/users/me/courses/recent?limit=5",
+              "query": [{ "key": "limit", "value": "5" }]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Últimos 5 cursos generados exitosamente."
+          }
+        },
+        {
+          "name": "GET /users/me/courses (con filtros)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/users/me/courses?visibility=all&sort=recent&page=1&limit=10",
+              "query": [
+                { "key": "visibility", "value": "all", "description": "all | completed | failed" },
+                { "key": "sort", "value": "recent", "description": "recent | rating" },
+                { "key": "q", "value": "", "description": "Búsqueda textual en el prompt" },
+                { "key": "page", "value": "1" },
+                { "key": "limit", "value": "10" }
+              ]
+            },
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Lista todos los cursos del usuario con paginación y filtros."
+          }
+        }
+      ]
+    },
+    {
+      "name": "🤖 Generación de Cursos",
+      "item": [
+        {
+          "name": "POST /courses/generate",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/courses/generate",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"Quiero aprender Angular para estudiantes de ingeniería de software\"\n}"
+            },
+            "description": "Inicia la generación de un curso con IA. Devuelve un job_id para monitorear por WebSocket.\nEl job_id se guarda automáticamente en {{job_id}}."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "if (pm.response.code === 202) {",
+                  "    const json = pm.response.json();",
+                  "    pm.collectionVariables.set('job_id', json.job_id);",
+                  "    console.log('job_id guardado:', json.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST /courses/generate/{id}/cancel",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/courses/generate/{{job_id}}/cancel",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Cancela una generación en progreso. Usa el {{job_id}} guardado automáticamente."
+          }
+        }
+      ]
+    },
+    {
+      "name": "👁️ Preview",
+      "item": [
+        {
+          "name": "GET /courses/preview/{id}",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/courses/preview/{{job_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Obtiene el preview del curso generado. Ejecutar DESPUÉS de que el pipeline complete."
+          }
+        },
+        {
+          "name": "POST /courses/preview/{id}/save",
+          "request": {
+            "method": "POST",
+            "url": "{{base_url}}/courses/preview/{{job_id}}/save",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Guarda el curso generado como permanente."
+          }
+        },
+        {
+          "name": "DELETE /courses/preview/{id}",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/courses/preview/{{job_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Descarta el preview. El curso NO será guardado."
+          }
+        }
+      ]
+    },
+    {
+      "name": "📚 Mis Cursos",
+      "item": [
+        {
+          "name": "GET /courses/{id}",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/courses/{{job_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Detalle completo de un curso específico."
+          }
+        },
+        {
+          "name": "PATCH /courses/{id} (editar)",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/courses/{{job_id}}",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Mi Curso Editado\",\n  \"description\": \"Nueva descripción del curso\"\n}"
+            }
+          }
+        },
+        {
+          "name": "PATCH /courses/{id}/visibility",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/courses/{{job_id}}/visibility",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"es_publico\": true\n}"
+            },
+            "description": "Hace el curso público (true) o privado (false)."
+          }
+        },
+        {
+          "name": "PATCH /courses/{id}/progress",
+          "request": {
+            "method": "PATCH",
+            "url": "{{base_url}}/courses/{{job_id}}/progress",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{jwt_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"part_index\": 2,\n  \"watched_seconds\": 340\n}"
+            },
+            "description": "Actualiza el progreso del usuario en una sección del curso."
+          }
+        },
+        {
+          "name": "DELETE /courses/{id}",
+          "request": {
+            "method": "DELETE",
+            "url": "{{base_url}}/courses/{{job_id}}",
+            "header": [{ "key": "Authorization", "value": "Bearer {{jwt_token}}" }],
+            "description": "Elimina el curso (borrado lógico)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "🌐 Explorar",
+      "item": [
+        {
+          "name": "GET /explore/courses",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/explore/courses?sort=recent&q=Angular&page=1",
+              "query": [
+                { "key": "sort", "value": "recent", "description": "recent | top_rated" },
+                { "key": "q", "value": "Angular", "description": "Búsqueda textual" },
+                { "key": "tag", "value": "", "description": "Filtrar por tag" },
+                { "key": "page", "value": "1" }
+              ]
+            },
+            "description": "Explora el catálogo de cursos públicos. No requiere autenticación."
+          }
+        },
+        {
+          "name": "GET /explore/courses/top-rated",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/explore/courses/top-rated",
+            "description": "Cursos mejor valorados. (Retorna 501 hasta que exista tabla de valoraciones)"
+          }
+        },
+        {
+          "name": "GET /explore/tags/popular",
+          "request": {
+            "method": "GET",
+            "url": "{{base_url}}/explore/tags/popular",
+            "description": "Tags más populares. (Retorna 501 hasta que exista columna de tags)"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -27,9 +27,9 @@ def create_app():
     from presentation.api.users_controller import users_bp
     app.register_blueprint(users_bp)
 
-    from presentation.api.course_controller import courses_bp, community_bp
+    from presentation.api.course_controller import courses_bp, explore_bp
     app.register_blueprint(courses_bp)
-    app.register_blueprint(community_bp)
+    app.register_blueprint(explore_bp)
 
     from presentation.api.course_generation_controller import course_gen_bp
     app.register_blueprint(course_gen_bp)

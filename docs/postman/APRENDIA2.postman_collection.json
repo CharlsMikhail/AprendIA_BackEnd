@@ -1,0 +1,56 @@
+{
+  "info": {
+    "_postman_id": "86f721cc-6be4-43be-b131-a280e7562cbd",
+    "name": "APRENDIA2",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "48028945",
+    "_collection_link": "https://go.postman.co/collection/48028945-86f721cc-6be4-43be-b131-a280e7562cbd?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Validar-Video",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Successful POST request\", function () {",
+              "    pm.expect(pm.response.code).to.be.oneOf([200, 201]);",
+              "});",
+              ""
+            ],
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {}
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n\t\"texto\": \"¡Hola, hola, hola! ¿Qué tal? Bienvenidos de nuevo al canal. Soy Rodrigo y si estás aquí por primera vez, pues bienvenido también — aquí hablamos de tecnología de forma sencilla, sin complicaciones, para que cualquier persona lo entienda. Hoy vamos a ver un tema que me piden muchísimo en los comentarios: informática y lenguajes de programación. Así que ponte cómodo, agarra tu café, y vamos. Empecemos por lo básico: ¿qué es la informática? La informática es la ciencia que estudia el tratamiento automático de la información mediante computadoras. Dicho en cristiano: es todo lo que tiene que ver con cómo las computadoras reciben datos, los procesan y nos devuelven un resultado. Así de simple.Ahora bien, dentro de la informática hay dos grandes ramas que debes conocer. Por un lado tenemos el hardware, que es todo lo físico — la pantalla, el teclado, el procesador — lo que puedes tocar. Y por otro lado está el software, que es todo lo intangible — los programas, el sistema operativo, las aplicaciones. ¿Queda claro? ¡Perfecto!Bien, antes de continuar, preguntita rápida para ver si estás atento. ¿Cuál de las siguientes opciones es un ejemplo de software? A) El teclado de tu computadora. B) El sistema operativo Windows. C) La memoria RAM física. D) El disco duro externo. Piénsalo un momento… La respuesta correcta es la B. El sistema operativo Windows es software — no lo puedes tocar, no tiene forma física, existe solo como un conjunto de instrucciones. ¡Muy bien si lo acertaste!Okey, ahora sí entramos al corazón del video: los lenguajes de programación. Un lenguaje de programación es un conjunto de reglas y símbolos que nos permite comunicarnos con la computadora para darle instrucciones. Básicamente es el idioma que entiende la máquina… bueno, que aprende a entender gracias a nosotros.Te pongo un ejemplo para que quede clarísimo. Imagínate que quieres que tu computadora sume dos números. Para ti es fácil decirlo en español: suma 5 más 3. Pero la computadora no habla español. Necesitamos traducir esa instrucción a un lenguaje que ella pueda interpretar. Eso es exactamente lo que hacemos con los lenguajes de programación.Ahora, ¿cómo se clasifican estos lenguajes? Tenemos dos categorías principales. Primero, los lenguajes de bajo nivel, que son los más cercanos al hardware — el más famoso es el lenguaje ensamblador.\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "http://aprendia.cramsoft.dev/validar-video",
+          "protocol": "http",
+          "host": [
+            "aprendia",
+            "cramsoft",
+            "dev"
+          ],
+          "path": [
+            "validar-video"
+          ]
+        }
+      },
+      "response": []
+    }
+  ]
+}

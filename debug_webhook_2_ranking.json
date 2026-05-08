@@ -1,0 +1,65 @@
+{
+    "job_id": "1a30fb64-966a-44b6-969c-c851aecae608",
+    "ranked_sections": [
+        {
+            "is_intro": true,
+            "section_id": 0,
+            "title": "Introducción",
+            "description": null,
+            "best_video": {
+                "videoId": "mock_vid_9808",
+                "title": "Video mockeado para introduccion a Quiero Parte 1",
+                "description": "Descripción simulada del video 1",
+                "url": "https://www.youtube.com/watch?v=mock_vid_9808",
+                "channelTitle": "Mock Channel",
+                "publishedAt": "2023-01-01T00:00:00Z",
+                "duration": "16m",
+                "total_minutes": 16,
+                "views": 5086,
+                "likes": 430,
+                "commentCount": 79,
+                "score": 98.5
+            }
+        },
+        {
+            "is_intro": false,
+            "section_id": 1,
+            "title": "Módulo 1",
+            "description": "Intro básica",
+            "best_video": {
+                "videoId": "mock_vid_6722",
+                "title": "Video mockeado para Módulo 1 Quiero Parte 1",
+                "description": "Descripción simulada del video 1",
+                "url": "https://www.youtube.com/watch?v=mock_vid_6722",
+                "channelTitle": "Mock Channel",
+                "publishedAt": "2023-01-01T00:00:00Z",
+                "duration": "11m",
+                "total_minutes": 9,
+                "views": 4923,
+                "likes": 186,
+                "commentCount": 17,
+                "score": 98.5
+            }
+        },
+        {
+            "is_intro": false,
+            "section_id": 2,
+            "title": "Módulo 2",
+            "description": "Práctica",
+            "best_video": {
+                "videoId": "mock_vid_3095",
+                "title": "Video mockeado para Módulo 2 Quiero Parte 1",
+                "description": "Descripción simulada del video 1",
+                "url": "https://www.youtube.com/watch?v=mock_vid_3095",
+                "channelTitle": "Mock Channel",
+                "publishedAt": "2023-01-01T00:00:00Z",
+                "duration": "19m",
+                "total_minutes": 5,
+                "views": 370,
+                "likes": 832,
+                "commentCount": 72,
+                "score": 98.5
+            }
+        }
+    ]
+}
