@@ -1,10 +1,13 @@
 import os
 import re
+import logging
 from datetime import datetime
 from googleapiclient.discovery import build
-import concurrent.futures
+from googleapiclient.errors import HttpError
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+SPANISH_STOP_WORDS = ['el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o', 'pero', 'si', 'de', 'en', 'para', 'por', 'con', 'sin', 'sobre', 'a', 'al', 'del', 'es', 'son', 'fue', 'ser', 'este', 'esta', 'ese', 'esa', 'que', 'como', 'cuando', 'donde', 'quien']
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
@@ -13,45 +16,16 @@ class YouTubeAPIClient:
         self.youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
 
     def search_videos(self, query: str, section_content: str = "", used_video_ids: set = None, max_results=10) -> list:
-        # --- INICIO MOCK FASE 1 ---
-        import logging
-        logging.info(f"MOCK YOUTUBE: Buscando videos para '{query}'")
-        import random
-        mock_candidates = []
-        for i in range(3):
-            vid = f"mock_vid_{random.randint(1000, 9999)}"
-            mock_candidates.append({
-                "videoId": vid,
-                "title": f"Video mockeado para {query} Parte {i+1}",
-                "description": f"Descripción simulada del video {i+1}",
-                "url": f"https://www.youtube.com/watch?v={vid}",
-                "channelTitle": "Mock Channel",
-                "publishedAt": "2023-01-01T00:00:00Z",
-                "duration": f"{random.randint(5, 20)}m",
-                "total_minutes": random.randint(5, 20),
-                "views": random.randint(100, 10000),
-                "likes": random.randint(10, 1000),
-                "commentCount": random.randint(5, 100)
-            })
-        return mock_candidates
-        # --- FIN MOCK FASE 1 ---
-
         """Search for YouTube videos based on query and return the best match"""
         if used_video_ids is None:
             used_video_ids = set()
 
-        # Determinar el número de hilos
-        max_workers = min(32, (os.cpu_count() or 1) * 2)
-
         try:
-            # TODO: Implementar búsqueda base de 50 videos como se pidió en la nueva arquitectura
-            # Actualmente se buscan 10 videos (según app-google-gpu.py).
             request_youtube = self.youtube.search().list(
                 part="snippet",
                 q=query,
                 type="video",
-                videoLicense="creativeCommon",
-                maxResults=10, 
+                maxResults=5, 
                 relevanceLanguage="es",
                 videoDuration="medium",
                 order="relevance"
@@ -72,8 +46,9 @@ class YouTubeAPIClient:
                 for item in response["items"]:
                     video_id = item["id"]["videoId"]
 
-                    # TODO: La lógica de transcripción se movió. Integrar aquí el llamado al nuevo pipeline.
-                    
+                    if video_id in used_video_ids:
+                        continue
+
                     video_details_data = details_map.get(video_id, {})
                     statistics = video_details_data.get("statistics", {})
                     content_details = video_details_data.get("contentDetails", {})
@@ -97,8 +72,6 @@ class YouTubeAPIClient:
                     # Calcular puntuación inicial
                     score = self.calculate_video_score(video_details_data, snippet, statistics, days_since_published, total_minutes, section_content)
 
-                    # TODO: Filtrar videos con score > 0.3 según requerimiento
-                    
                     video_data = {
                         "title": item["snippet"]["title"],
                         "description": item["snippet"]["description"],
@@ -118,16 +91,22 @@ class YouTubeAPIClient:
 
                     all_videos_data.append(video_data)
 
-                # Ordenar los videos por score y tomar los 5 mejores
+                # Ordenar los videos por score y tomar la cantidad pedida
                 sorted_videos = sorted(all_videos_data, key=lambda x: x["score"], reverse=True)
-                top_5_videos = sorted_videos[:5]
+                top_videos = sorted_videos[:max_results]
 
-                return top_5_videos
+                return top_videos
 
             return []
 
+        except HttpError as e:
+            if e.resp.status == 403:
+                logging.error(f"Error de Cuota o Permisos en API de YouTube (403): {e}")
+            else:
+                logging.error(f"Error HTTP de YouTube API: {e}")
+            return []
         except Exception as e:
-            print(f"Error searching YouTube videos: {e}")
+            logging.error(f"Error inesperado buscando videos en YouTube: {e}", exc_info=True)
             return []
 
     def calculate_video_score(self, video_details, snippet, statistics, days_since_published, total_minutes, section_content=""):
@@ -137,7 +116,7 @@ class YouTubeAPIClient:
             relevance_score = 0.0
             if section_content:
                 video_text = f"{snippet.get('title', '')} {snippet.get('description', '')}"
-                vectorizer = TfidfVectorizer(stop_words='english')
+                vectorizer = TfidfVectorizer(stop_words=SPANISH_STOP_WORDS)
                 try:
                     tfidf_matrix = vectorizer.fit_transform([video_text, section_content])
                     similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
@@ -155,9 +134,9 @@ class YouTubeAPIClient:
             quality_score = 0
             definition = video_details.get('contentDetails', {}).get('definition')
             if definition == 'hd':
-                quality_score = 0.8
+                quality_score = 1.0
             elif definition == 'sd':
-                quality_score = 0.4
+                quality_score = 0.5
             else:
                 quality_score = 0.3
 
@@ -170,10 +149,17 @@ class YouTubeAPIClient:
             if views > 100:
                 like_ratio = (likes / views)
                 comment_ratio = (comments / views)
-                engagement_score = min(1.0, (like_ratio * 5) * 0.6 + (comment_ratio * 20) * 0.4)
+                engagement_score = min(1.0, (like_ratio * 20) * 0.6 + (comment_ratio * 100) * 0.4)
 
             # 5. Actualidad (10%)
-            recency_score = 1.0 if days_since_published <= 365 else (0.5 if days_since_published <= 730 else 0.2)
+            if days_since_published <= 365:
+                recency_score = 1.0
+            elif days_since_published <= 365 * 3:
+                recency_score = 0.8
+            elif days_since_published <= 365 * 5:
+                recency_score = 0.5
+            else:
+                recency_score = 0.3
 
             # 6. Duración (10%)
             duration_score = 1.0 if 5 <= total_minutes <= 25 else (0.5 if total_minutes < 5 else 0.7)
@@ -191,5 +177,5 @@ class YouTubeAPIClient:
             return final_score
 
         except Exception as e:
-            print(f"Error calculando score del video: {e}")
+            logging.error(f"Error calculando score del video: {e}")
             return 0.0

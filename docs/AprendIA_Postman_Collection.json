@@ -1,0 +1,578 @@
+{
+	"info": {
+		"_postman_id": "aprendia-backend-v1",
+		"name": "AprendIA Backend API - Fase 1",
+		"description": "Colección completa de pruebas para el Backend de AprendIA.\n\nFase 1: Todos los endpoints funcionan con lógica mock.\n\nBase URL: http://localhost:5000",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:5000"
+		},
+		{
+			"key": "colab_token",
+			"value": "AprendiaSecret2026"
+		},
+		{
+			"key": "job_id",
+			"value": ""
+		}
+	],
+	"item": [
+		{
+			"name": "0. Infraestructura",
+			"item": [
+				{
+					"name": "Healthcheck",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"health"
+							]
+						},
+						"description": "Verifica que el servidor esté arriba y conectado a la DB."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "1. Autenticación",
+			"item": [
+				{
+					"name": "Login con Google",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"google_token\": \"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.mock_token_para_pruebas\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/google",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"google"
+							]
+						},
+						"description": "Simula el login con un token de Google OAuth2.\n\nEsperado: 200 OK con access_token, refresh_token y needs_onboarding."
+					},
+					"response": []
+				},
+				{
+					"name": "Login con Google (Sin Token - Error)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"google_token\": \"\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/google",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"google"
+							]
+						},
+						"description": "Prueba de validación: envía un token vacío.\n\nEsperado: 400 Bad Request."
+					},
+					"response": []
+				},
+				{
+					"name": "Refresh Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{}"
+						},
+						"url": {
+							"raw": "{{base_url}}/auth/refresh",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"auth",
+								"refresh"
+							]
+						},
+						"description": "Renueva el access_token.\n\nEsperado: 200 OK con nuevo access_token."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "2. Usuarios",
+			"item": [
+				{
+					"name": "Obtener Mi Perfil",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/users/me",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"users",
+								"me"
+							]
+						},
+						"description": "Obtiene los datos del usuario autenticado.\n\nEsperado: 200 OK con datos del perfil mock."
+					},
+					"response": []
+				},
+				{
+					"name": "Completar Perfil (Onboarding)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"nombre_usuario\": \"GrokMaster99\",\n    \"nombre_completo\": \"Juan Pérez\",\n    \"intereses\": [\"Python\", \"Machine Learning\", \"Data Science\"]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/users/complete-profile",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"users",
+								"complete-profile"
+							]
+						},
+						"description": "Finaliza el registro del usuario con datos adicionales.\n\nEsperado: 200 OK con mensaje de confirmación."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "3. Pipeline de Generación (⭐ FLUJO PRINCIPAL)",
+			"item": [
+				{
+					"name": "3.1 Generar Curso (Inicio del Pipeline)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"// Guardar el job_id automáticamente para usarlo en las siguientes pruebas",
+									"var jsonData = pm.response.json();",
+									"if (jsonData.job_id) {",
+									"    pm.collectionVariables.set('job_id', jsonData.job_id);",
+									"    console.log('job_id guardado: ' + jsonData.job_id);",
+									"}",
+									"",
+									"pm.test('Status code is 202', function () {",
+									"    pm.response.to.have.status(202);",
+									"});",
+									"",
+									"pm.test('Response has job_id', function () {",
+									"    pm.expect(jsonData).to.have.property('job_id');",
+									"});",
+									"",
+									"pm.test('Status is processing', function () {",
+									"    pm.expect(jsonData.status).to.eql('processing');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"prompt\": \"Quiero aprender Python desde cero para Data Science\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/courses/generate",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"generate"
+							]
+						},
+						"description": "⭐ ENDPOINT PRINCIPAL ⭐\n\nInicia la generación asíncrona de un curso.\n\nEsperado: 202 Accepted con job_id.\n\nDespués de esta llamada, en la consola del servidor verás cómo se disparan automáticamente:\n1. Mock Colab #1 (esquema) → POST /colab/entregar_esquema (~3s)\n2. Búsqueda YouTube (mock)\n3. Mock Colab #2 (ranking) → POST /colab/entregar_ranking (~4s más)\n\n💡 El job_id se guarda automáticamente en las variables de la colección."
+					},
+					"response": []
+				},
+				{
+					"name": "3.2 Generar Curso (Prompt Vacío - Error)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"prompt\": \"\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/courses/generate",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"generate"
+							]
+						},
+						"description": "Prueba de validación: envía un prompt vacío.\n\nEsperado: 400 Bad Request."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "4. Webhooks Colab (Simulación Manual)",
+			"item": [
+				{
+					"name": "4.1 Entregar Esquema (Colab #1 → Backend)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{colab_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"job_id\": \"{{job_id}}\",\n    \"course_outline\": {\n        \"title\": \"Curso de Python para Data Science\",\n        \"introduction\": \"Aprende Python desde cero enfocado en ciencia de datos\",\n        \"sections\": [\n            {\n                \"title\": \"Módulo 1: Fundamentos de Python\",\n                \"description\": \"Variables, tipos de datos y estructuras de control\",\n                \"level\": \"principiante\"\n            },\n            {\n                \"title\": \"Módulo 2: NumPy y Pandas\",\n                \"description\": \"Manipulación de datos con las librerías fundamentales\",\n                \"level\": \"intermedio\"\n            },\n            {\n                \"title\": \"Módulo 3: Visualización\",\n                \"description\": \"Crear gráficos con Matplotlib y Seaborn\",\n                \"level\": \"intermedio\"\n            }\n        ],\n        \"learningOutcomes\": [\n            \"Dominar las estructuras de datos de Python\",\n            \"Manipular DataFrames con Pandas\",\n            \"Crear visualizaciones profesionales\"\n        ],\n        \"requirements\": [\"Computadora con Python 3.10+\", \"Ganas de aprender\"],\n        \"level\": \"principiante\",\n        \"level_description\": \"No se requiere experiencia previa\"\n    }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/colab/entregar_esquema",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"colab",
+								"entregar_esquema"
+							]
+						},
+						"description": "Simula manualmente lo que haría Colab #1 al devolver el esquema.\n\n⚠️ Requiere el header Authorization con Bearer token.\n⚠️ Requiere un job_id válido (ejecuta primero '3.1 Generar Curso').\n\nEsperado: 202 Accepted."
+					},
+					"response": []
+				},
+				{
+					"name": "4.2 Entregar Ranking (Colab #2 → Backend)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer {{colab_token}}"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"job_id\": \"{{job_id}}\",\n    \"ranked_sections\": [\n        {\n            \"is_intro\": true,\n            \"section_id\": 0,\n            \"title\": \"Introducción\",\n            \"description\": \"Video introductorio\",\n            \"best_video\": {\n                \"videoId\": \"rfscVS0vtbw\",\n                \"title\": \"Learn Python - Full Course for Beginners\",\n                \"duration\": \"240m\",\n                \"score\": 97.5\n            }\n        },\n        {\n            \"is_intro\": false,\n            \"section_id\": 1,\n            \"title\": \"Módulo 1: Fundamentos de Python\",\n            \"description\": \"Variables, tipos de datos\",\n            \"best_video\": {\n                \"videoId\": \"kqtD5dpn9C8\",\n                \"title\": \"Python para Principiantes\",\n                \"duration\": \"15m\",\n                \"score\": 95.2\n            }\n        },\n        {\n            \"is_intro\": false,\n            \"section_id\": 2,\n            \"title\": \"Módulo 2: NumPy y Pandas\",\n            \"description\": \"Manipulación de datos\",\n            \"best_video\": {\n                \"videoId\": \"vmEHCJofslg\",\n                \"title\": \"Pandas Tutorial\",\n                \"duration\": \"60m\",\n                \"score\": 92.8\n            }\n        }\n    ]\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/colab/entregar_ranking",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"colab",
+								"entregar_ranking"
+							]
+						},
+						"description": "Simula manualmente lo que haría Colab #2 al devolver el ranking.\n\n⚠️ Requiere el header Authorization con Bearer token.\n⚠️ Requiere que el esquema ya haya sido procesado.\n\nEsperado: 200 OK con course_id."
+					},
+					"response": []
+				},
+				{
+					"name": "4.3 Webhook Sin Token (Error Auth)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"job_id\": \"test\",\n    \"course_outline\": {}\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/colab/entregar_esquema",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"colab",
+								"entregar_esquema"
+							]
+						},
+						"description": "Prueba de seguridad: intenta llamar al webhook SIN token de autorización.\n\nEsperado: 401 Unauthorized."
+					},
+					"response": []
+				},
+				{
+					"name": "4.4 Webhook Con Token Incorrecto (Error Auth)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Authorization",
+								"value": "Bearer TOKEN_INCORRECTO_123"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"job_id\": \"test\",\n    \"course_outline\": {}\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/colab/entregar_esquema",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"colab",
+								"entregar_esquema"
+							]
+						},
+						"description": "Prueba de seguridad: intenta llamar al webhook con un token INCORRECTO.\n\nEsperado: 401 Unauthorized."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "5. Mis Cursos",
+			"item": [
+				{
+					"name": "Listar Mis Cursos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/courses/me",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"me"
+							]
+						},
+						"description": "Obtiene la lista resumida de cursos del usuario.\n\nEsperado: 200 OK con array de cursos mock."
+					},
+					"response": []
+				},
+				{
+					"name": "Detalle de un Curso",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/courses/42",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"42"
+							]
+						},
+						"description": "Obtiene la información completa de un curso con secciones y videos.\n\nEsperado: 200 OK con curso detallado mock."
+					},
+					"response": []
+				},
+				{
+					"name": "Actualizar Curso",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"titulo\": \"Python Data Science - Edición 2026\",\n    \"descripcion\": \"Curso actualizado con nuevas tendencias\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/courses/42",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"42"
+							]
+						},
+						"description": "Modifica título y/o descripción de un curso.\n\nEsperado: 200 OK."
+					},
+					"response": []
+				},
+				{
+					"name": "Cambiar Visibilidad del Curso",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"es_publico\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/courses/42/visibility",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"42",
+								"visibility"
+							]
+						},
+						"description": "Publica o despublica un curso en la comunidad.\n\nEsperado: 200 OK."
+					},
+					"response": []
+				},
+				{
+					"name": "Eliminar Curso (Borrado Lógico)",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/courses/42",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"42"
+							]
+						},
+						"description": "Elimina un curso de forma lógica (no se borra de la DB).\n\nEsperado: 200 OK."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "6. Comunidad",
+			"item": [
+				{
+					"name": "Explorar Cursos Públicos",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/courses/explore",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"explore"
+							]
+						},
+						"description": "Lista los cursos publicados por la comunidad.\n\nEsperado: 200 OK con array de cursos públicos."
+					},
+					"response": []
+				},
+				{
+					"name": "Valorar un Curso",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"valoracion\": 5\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/courses/88/rate",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"courses",
+								"88",
+								"rate"
+							]
+						},
+						"description": "Envía una valoración (1-5) a un curso público.\n\nEsperado: 200 OK con nueva valoración promedio."
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

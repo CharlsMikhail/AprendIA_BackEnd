@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de Token de Google</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f4f7f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        h2 { color: #333; margin-bottom: 20px; }
+        input[type="text"] {
+            width: 90%;
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        #g_id_onload { display: none; }
+        .token-area {
+            margin-top: 20px;
+            text-align: left;
+            display: none;
+        }
+        textarea {
+            width: 100%;
+            height: 150px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            font-family: monospace;
+            resize: none;
+            background: #f9f9f9;
+        }
+        button {
+            margin-top: 10px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover { background: #45a049; }
+        .hint { font-size: 12px; color: #666; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🔑 Obtener Google id_token</h2>
+    
+    <p class="hint">1. Pega tu GOOGLE_CLIENT_ID (del .env del backend):</p>
+    <input type="text" id="client_id" placeholder="Ej: 123456789-abc.apps.googleusercontent.com" onchange="loadGoogleScript()">
+    
+    <p class="hint">2. Inicia sesión:</p>
+    <div id="buttonDiv"></div>
+
+    <div class="token-area" id="tokenArea">
+        <p class="hint">3. Copia tu id_token y pégalo en Postman:</p>
+        <textarea id="tokenResult" readonly></textarea>
+        <button onclick="copyToken()">Copiar al Portapapeles</button>
+    </div>
+</div>
+
+<script>
+    function handleCredentialResponse(response) {
+        const tokenArea = document.getElementById('tokenArea');
+        const tokenResult = document.getElementById('tokenResult');
+        
+        tokenResult.value = response.credential;
+        tokenArea.style.display = 'block';
+    }
+
+    function loadGoogleScript() {
+        const clientId = document.getElementById('client_id').value.trim();
+        if (!clientId) return;
+
+        // Limpiar el botón anterior si existe
+        document.getElementById('buttonDiv').innerHTML = '';
+
+        // Script de Google Identity Services
+        const script = document.createElement('script');
+        script.src = "https://accounts.google.com/gsi/client";
+        script.async = true;
+        script.defer = true;
+        
+        script.onload = () => {
+            google.accounts.id.initialize({
+                client_id: clientId,
+                callback: handleCredentialResponse
+            });
+            google.accounts.id.renderButton(
+                document.getElementById("buttonDiv"),
+                { theme: "outline", size: "large", width: "100%" }
+            );
+        };
+        
+        document.body.appendChild(script);
+    }
+
+    function copyToken() {
+        const textarea = document.getElementById("tokenResult");
+        textarea.select();
+        document.execCommand("copy");
+        alert("¡Token copiado al portapapeles! Ve a Postman y pégalo.");
+    }
+</script>
+
+</body>
+</html>
